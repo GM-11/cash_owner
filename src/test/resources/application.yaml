@@ -1,0 +1,16 @@
+# Tests start the Spring context without a sequencer or a Kafka broker.
+spring:
+  grpc:
+    server:
+      port: 0
+  kafka:
+    listener:
+      auto-startup: false
+cash-owner:
+  kafka:
+    engine-events-topic: engine.events.v1
+    account-updates-topic: cash.account-updates.v1
+  sequencer:
+    enabled: false
+    reconnect-min: 100ms
+    reconnect-max: 5s
