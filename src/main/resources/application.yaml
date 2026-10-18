@@ -1,0 +1,40 @@
+# Cash owner. Contracts: docs/api-contracts.md §4.2 (gRPC) and §5 (Kafka).
+spring:
+  application:
+    name: cash-owner
+
+  grpc:
+    server:
+      port: 50071                       # the order gateway's CASH_OWNER_ADDR default
+    client:
+      channel:
+        sequencer:
+          target: static://127.0.0.1:50051   # sequencer's default listen address
+
+  kafka:
+    bootstrap-servers: 127.0.0.1:9092   # infra/kafka/compose.yaml
+    consumer:
+      group-id: cash-owner
+      auto-offset-reset: earliest       # a new cash owner reads engine events from the start
+      enable-auto-commit: false         # offsets are a convenience; last_applied per symbol is the truth
+      isolation-level: read_committed
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+    producer:
+      acks: all                         # an AccountUpdate is only "sent" once the broker has it
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
+      properties:
+        enable.idempotence: true        # a producer retry never writes the same update twice
+    listener:
+      ack-mode: record
+      concurrency: 1                    # one reader thread: per-symbol order must be kept
+
+cash-owner:
+  kafka:
+    engine-events-topic: engine.events.v1          # in:  MarketEvent, key = symbol id
+    account-updates-topic: cash.account-updates.v1 # out: AccountUpdate, key = account id
+  sequencer:
+    enabled: true
+    reconnect-min: 100ms
+    reconnect-max: 5s
