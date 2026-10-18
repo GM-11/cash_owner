@@ -138,7 +138,7 @@ public class SequencerLink implements SmartLifecycle {
             }
             out = requests;
         }
-        log.info("sequencer stream opened");
+        log.info("sequencer stream started");
         onStreamOpened.run();
     }
 
