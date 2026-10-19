@@ -20,7 +20,6 @@ import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.stub.StreamObserver;
 import org.springframework.grpc.server.service.GrpcService;
 
-
 @GrpcService
 public class CashOwnerService extends CashOwnerGrpc.CashOwnerImplBase {
 
