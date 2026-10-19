@@ -1,5 +1,10 @@
 package com.protrader.cash_owner.models;
 
+import lombok.Getter;
+import lombok.Setter;
+
+@Getter
+@Setter
 public final class Order {
     final OrderKey key;
     final int symbol;
@@ -12,7 +17,7 @@ public final class Order {
     long orderId;
     OrderStage stage;
 
-    Order(OrderKey key, int symbol, Side side, long limitPriceMinor, long originalQty) {
+    public Order(OrderKey key, int symbol, Side side, long limitPriceMinor, long originalQty) {
         this.key = key;
         this.symbol = symbol;
         this.side = side;
@@ -25,43 +30,4 @@ public final class Order {
         this.stage = OrderStage.SENT;
     }
 
-    public OrderKey key() {
-        return key;
-    }
-
-    public int symbol() {
-        return symbol;
-    }
-
-    public Side side() {
-        return side;
-    }
-
-    public long limitPriceMinor() {
-        return limitPriceMinor;
-    }
-
-    public long originalQty() {
-        return originalQty;
-    }
-
-    public long remainingQty() {
-        return remainingQty;
-    }
-
-    public long filledQty() {
-        return filledQty;
-    }
-
-    public long filledNotionalMinor() {
-        return filledNotionalMinor;
-    }
-
-    public long orderId() {
-        return orderId;
-    }
-
-    public OrderStage stage() {
-        return stage;
-    }
 }

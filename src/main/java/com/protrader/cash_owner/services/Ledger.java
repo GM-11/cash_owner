@@ -1,4 +1,4 @@
-package com.protrader.cash_owner.models;
+package com.protrader.cash_owner.services;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -6,6 +6,16 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+
+import com.protrader.cash_owner.models.Account;
+import com.protrader.cash_owner.models.EngineRef;
+import com.protrader.cash_owner.models.Holding;
+import com.protrader.cash_owner.models.Order;
+import com.protrader.cash_owner.models.OrderKey;
+import com.protrader.cash_owner.models.OrderStage;
+import com.protrader.cash_owner.models.PlaceResult;
+import com.protrader.cash_owner.models.RejectReason;
+import com.protrader.cash_owner.models.Side;
 
 public final class Ledger {
     private final Map<Long, Account> accounts = new HashMap<>();
@@ -27,7 +37,8 @@ public final class Ledger {
         }
         Account account = new Account(accountId, cashMinor, 0);
         for (Map.Entry<Integer, Long> e : shares.entrySet()) {
-            account.holding(e.getKey()).freeQty = e.getValue();
+            Map<Integer, Holding> holdings = account.getHoldings();
+            holdings.put(e.getKey(), new Holding(e.getValue(), 0));
         }
         accounts.put(accountId, account);
     }
@@ -58,20 +69,20 @@ public final class Ledger {
             } catch (ArithmeticException e) {
                 return new PlaceResult.Rejected(RejectReason.INSUFFICIENT_CASH, Long.MAX_VALUE);
             }
-            if (account.freeCashMinor < need) {
-                return new PlaceResult.Rejected(RejectReason.INSUFFICIENT_CASH, need - account.freeCashMinor);
+            if (account.getFreeCashMinor() < need) {
+                return new PlaceResult.Rejected(RejectReason.INSUFFICIENT_CASH, need - account.getFreeCashMinor());
             }
-            account.freeCashMinor -= need;
-            account.lockedCashMinor += need;
+            account.setFreeCashMinor(account.getFreeCashMinor() - need);
+            account.setLockedCashMinor(account.getLockedCashMinor() + need);
         } else {
-            Holding currentHolding = account.holdings.get(symbol);
-            long freeQty = currentHolding == null ? 0 : currentHolding.freeQty;
+            Holding currentHolding = account.getHoldings().get(symbol);
+            long freeQty = currentHolding == null ? 0 : currentHolding.getFreeQty();
             if (freeQty < qty) {
                 return new PlaceResult.Rejected(RejectReason.INSUFFICIENT_HOLDINGS, 0);
             }
-            Holding holding = account.holding(symbol);
-            holding.freeQty -= qty;
-            holding.lockedQty += qty;
+            Holding holding = account.getHoldingFromSymbol(symbol);
+            holding.setFreeQty(holding.getFreeQty() - qty);
+            holding.setLockedQty(holding.getLockedQty() + qty);
         }
 
         Order order = new Order(key, symbol, side, limitPriceMinor, qty);
@@ -81,58 +92,58 @@ public final class Ledger {
 
     public void onAccepted(OrderKey key, long orderId) {
         Order order = orders.get(key);
-        if (order == null || (order.stage != OrderStage.SENT && order.stage != OrderStage.IN_DOUBT)) {
+        if (order == null || (order.getStage() != OrderStage.SENT && order.getStage() != OrderStage.IN_DOUBT)) {
             return;
         }
         if (orderId <= 0) {
             throw new IllegalArgumentException("orderId must be positive: " + orderId);
         }
-        EngineRef ref = new EngineRef(order.symbol, orderId);
+        EngineRef ref = new EngineRef(order.getSymbol(), orderId);
         OrderKey clashing = byEngineRef.get(ref);
         if (clashing != null && !clashing.equals(key)) {
             throw new IllegalStateException(
                     "engine ref " + ref + " already maps to " + clashing + ", cannot also map to " + key);
         }
-        order.orderId = orderId;
-        order.stage = OrderStage.OPEN;
+        order.setOrderId(orderId);
+        order.setStage(OrderStage.OPEN);
         byEngineRef.put(ref, key);
     }
 
     public void onRefused(OrderKey key) {
         Order order = orders.get(key);
-        if (order == null || (order.stage != OrderStage.SENT && order.stage != OrderStage.IN_DOUBT)) {
+        if (order == null || (order.getStage() != OrderStage.SENT && order.getStage() != OrderStage.IN_DOUBT)) {
             return;
         }
         releaseLock(order);
-        order.remainingQty = 0;
-        order.stage = OrderStage.DONE;
+        order.setRemainingQty(0);
+        order.setStage(OrderStage.DONE);
     }
 
     public void onNoAnswer(OrderKey key) {
         Order order = orders.get(key);
-        if (order == null || order.stage != OrderStage.SENT) {
+        if (order == null || order.getStage() != OrderStage.SENT) {
             return;
         }
-        order.stage = OrderStage.IN_DOUBT;
+        order.setStage(OrderStage.IN_DOUBT);
     }
 
     private void releaseLock(Order order) {
-        Account account = accounts.get(order.key.accountId());
-        if (order.side == Side.BUY) {
-            long amount = Math.multiplyExact(order.limitPriceMinor, order.remainingQty);
-            account.lockedCashMinor -= amount;
-            account.freeCashMinor += amount;
+        Account account = accounts.get(order.getKey().accountId());
+        if (order.getSide() == Side.BUY) {
+            long amount = Math.multiplyExact(order.getLimitPriceMinor(), order.getRemainingQty());
+            account.setLockedCashMinor(account.getLockedCashMinor() - amount);
+            account.setFreeCashMinor(account.getFreeCashMinor() + amount);
         } else {
-            Holding holding = account.holding(order.symbol);
-            holding.lockedQty -= order.remainingQty;
-            holding.freeQty += order.remainingQty;
+            Holding holding = account.getHoldingFromSymbol(order.getSymbol());
+            holding.setLockedQty(holding.getLockedQty() - order.getRemainingQty());
+            holding.setFreeQty(holding.getFreeQty() + order.getRemainingQty());
         }
     }
 
     public List<Order> inDoubt() {
         List<Order> result = new ArrayList<>();
         for (Order order : orders.values()) {
-            if (order.stage == OrderStage.IN_DOUBT) {
+            if (order.getStage() == OrderStage.IN_DOUBT) {
                 result.add(order);
             }
         }
@@ -154,15 +165,15 @@ public final class Ledger {
 
     public void checkInvariants() {
         for (Account account : accounts.values()) {
-            if (account.freeCashMinor < 0 || account.lockedCashMinor < 0) {
-                throw new IllegalStateException("negative cash for account " + account.accountId + ": free="
-                        + account.freeCashMinor + " locked=" + account.lockedCashMinor);
+            if (account.getFreeCashMinor() < 0 || account.getLockedCashMinor() < 0) {
+                throw new IllegalStateException("negative cash for account " + account.getAccountId() + ": free="
+                        + account.getFreeCashMinor() + " locked=" + account.getLockedCashMinor());
             }
-            for (Map.Entry<Integer, Holding> e : account.holdings.entrySet()) {
+            for (Map.Entry<Integer, Holding> e : account.getHoldings().entrySet()) {
                 Holding h = e.getValue();
-                if (h.freeQty < 0 || h.lockedQty < 0) {
-                    throw new IllegalStateException("negative shares for account " + account.accountId + " symbol "
-                            + e.getKey() + ": free=" + h.freeQty + " locked=" + h.lockedQty);
+                if (h.getFreeQty() < 0 || h.getLockedQty() < 0) {
+                    throw new IllegalStateException("negative shares for account " + account.getAccountId() + " symbol "
+                            + e.getKey() + ": free=" + h.getFreeQty() + " locked=" + h.getLockedQty());
                 }
             }
         }
@@ -170,40 +181,41 @@ public final class Ledger {
         Map<Long, Long> expectedLockedCash = new HashMap<>();
         Map<Long, Map<Integer, Long>> expectedLockedQty = new HashMap<>();
         for (Order order : orders.values()) {
-            if (order.stage != OrderStage.SENT && order.stage != OrderStage.IN_DOUBT
-                    && order.stage != OrderStage.OPEN) {
+            if (order.getStage() != OrderStage.SENT && order.getStage() != OrderStage.IN_DOUBT
+                    && order.getStage() != OrderStage.OPEN) {
                 continue;
             }
-            long accountId = order.key.accountId();
-            if (order.side == Side.BUY) {
-                long amount = Math.multiplyExact(order.limitPriceMinor, order.remainingQty);
+            long accountId = order.getKey().accountId();
+            if (order.getSide() == Side.BUY) {
+                long amount = Math.multiplyExact(order.getLimitPriceMinor(), order.getRemainingQty());
                 expectedLockedCash.merge(accountId, amount, Long::sum);
             } else {
                 expectedLockedQty.computeIfAbsent(accountId, a -> new HashMap<>())
-                        .merge(order.symbol, order.remainingQty, Long::sum);
+                        .merge(order.getSymbol(), order.getRemainingQty(), Long::sum);
             }
         }
 
         for (Account account : accounts.values()) {
-            long expectedCash = expectedLockedCash.getOrDefault(account.accountId, 0L);
-            if (account.lockedCashMinor != expectedCash) {
-                throw new IllegalStateException("locked cash mismatch for account " + account.accountId + ": locked="
-                        + account.lockedCashMinor + " expected=" + expectedCash);
+            long expectedCash = expectedLockedCash.getOrDefault(account.getAccountId(), 0L);
+            if (account.getLockedCashMinor() != expectedCash) {
+                throw new IllegalStateException(
+                        "locked cash mismatch for account " + account.getAccountId() + ": locked="
+                                + account.getLockedCashMinor() + " expected=" + expectedCash);
             }
 
-            Map<Integer, Long> expectedQtyBySymbol = expectedLockedQty.getOrDefault(account.accountId, Map.of());
+            Map<Integer, Long> expectedQtyBySymbol = expectedLockedQty.getOrDefault(account.getAccountId(), Map.of());
             for (Map.Entry<Integer, Long> e : expectedQtyBySymbol.entrySet()) {
-                Holding holding = account.holdings.get(e.getKey());
-                long actual = holding == null ? 0 : holding.lockedQty;
+                Holding holding = account.getHoldings().get(e.getKey());
+                long actual = holding == null ? 0 : holding.getLockedQty();
                 if (actual != e.getValue()) {
-                    throw new IllegalStateException("locked qty mismatch for account " + account.accountId
+                    throw new IllegalStateException("locked qty mismatch for account " + account.getAccountId()
                             + " symbol " + e.getKey() + ": locked=" + actual + " expected=" + e.getValue());
                 }
             }
-            for (Map.Entry<Integer, Holding> e : account.holdings.entrySet()) {
-                if (!expectedQtyBySymbol.containsKey(e.getKey()) && e.getValue().lockedQty != 0) {
-                    throw new IllegalStateException("locked qty mismatch for account " + account.accountId
-                            + " symbol " + e.getKey() + ": locked=" + e.getValue().lockedQty + " expected=0");
+            for (Map.Entry<Integer, Holding> e : account.getHoldings().entrySet()) {
+                if (!expectedQtyBySymbol.containsKey(e.getKey()) && e.getValue().getLockedQty() != 0) {
+                    throw new IllegalStateException("locked qty mismatch for account " + account.getAccountId()
+                            + " symbol " + e.getKey() + ": locked=" + e.getValue().getLockedQty() + " expected=0");
                 }
             }
         }
@@ -211,7 +223,7 @@ public final class Ledger {
         for (Map.Entry<EngineRef, OrderKey> e : byEngineRef.entrySet()) {
             EngineRef ref = e.getKey();
             Order order = orders.get(e.getValue());
-            if (order == null || order.symbol != ref.symbol() || order.orderId != ref.orderId()) {
+            if (order == null || order.getSymbol() != ref.symbol() || order.getOrderId() != ref.orderId()) {
                 throw new IllegalStateException("byEngineRef entry " + ref + " does not match its order");
             }
         }
