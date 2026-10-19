@@ -18,3 +18,5 @@ cash-owner:
     max-pending-requests: 10000
     check-invariants: true      # dev: on. Costs O(all orders) per job, so turn off under load tests / prod
     shutdown-drain: 5s
+  dev-seed:
+    accounts: []

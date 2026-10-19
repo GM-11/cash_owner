@@ -32,7 +32,7 @@ public final class LedgerOwner implements SmartLifecycle {
      */
     private static final int PHASE = Integer.MIN_VALUE + 1000;
 
-    record Settings(int maxPendingRequests, boolean checkInvariants, Duration shutdownDrain) {
+    public record Settings(int maxPendingRequests, boolean checkInvariants, Duration shutdownDrain) {
     }
 
     private enum State {
@@ -84,6 +84,11 @@ public final class LedgerOwner implements SmartLifecycle {
         if (settings.shutdownDrain() == null || settings.shutdownDrain().isNegative()) {
             throw new IllegalArgumentException("shutdownDrain must not be negative: " + settings.shutdownDrain());
         }
+    }
+
+    /** For tests outside this package: same as the package-private constructor. */
+    public static LedgerOwner forTests(Settings settings, Consumer<Ledger> invariantCheck) {
+        return new LedgerOwner(settings, invariantCheck);
     }
 
     private static Settings toSettings(CashOwnerProperties props) {

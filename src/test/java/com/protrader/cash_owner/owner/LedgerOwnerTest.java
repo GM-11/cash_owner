@@ -298,7 +298,7 @@ class LedgerOwnerTest {
         assertInstanceOf(OwnerUnavailableException.class, failureOf(notStarted.request(l -> 1)));
         assertInstanceOf(OwnerUnavailableException.class, failureOf(notStarted.followUp(l -> 1)));
 
-        assertEquals(1, get(owner.request(l -> 1)));
+        assertEquals(Integer.valueOf(1), get(owner.request(l -> 1)));
         owner.stop();
         assertFalse(owner.isRunning());
         assertInstanceOf(OwnerUnavailableException.class, failureOf(owner.request(l -> 1)));

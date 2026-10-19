@@ -120,8 +120,9 @@ public final class Ledger {
             return;
         }
         releaseLock(order);
-        order.setRemainingQty(0);
-        order.setStage(OrderStage.DONE);
+        // A refused order was never stored by the sequencer, so forget it here too: a retry with the same
+        // client_order_id must be a fresh order, not a Duplicate. It has no byEngineRef entry yet.
+        orders.remove(key);
     }
 
     public void onNoAnswer(OrderKey key) {

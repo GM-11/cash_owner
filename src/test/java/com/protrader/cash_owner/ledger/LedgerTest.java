@@ -131,7 +131,25 @@ class LedgerTest {
         AccountView account = ledger.account(1).orElseThrow();
         assertEquals(500_000, account.freeCashMinor());
         assertEquals(0, account.lockedCashMinor());
-        assertEquals(OrderStage.DONE, ledger.order(key).orElseThrow().stage());
+        assertTrue(ledger.order(key).isEmpty());
+        ledger.checkInvariants();
+    }
+
+    @Test
+    void placeAfterRefusalWithSameKeyLocksAgain() {
+        Ledger ledger = new Ledger();
+        ledger.openAccount(1, 500_000, Map.of());
+        OrderKey key = new OrderKey(1, "a");
+        ledger.place(1, "a", SYMBOL, Side.BUY, 10_000, 10);
+        ledger.onRefused(key);
+
+        PlaceResult again = ledger.place(1, "a", SYMBOL, Side.BUY, 10_000, 10);
+
+        assertTrue(again instanceof PlaceResult.Locked);
+        AccountView account = ledger.account(1).orElseThrow();
+        assertEquals(400_000, account.freeCashMinor());
+        assertEquals(100_000, account.lockedCashMinor());
+        assertEquals(OrderStage.SENT, ledger.order(key).orElseThrow().stage());
         ledger.checkInvariants();
     }
 

@@ -15,7 +15,7 @@ import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
 
 @Component
-public class SequencerLink implements SmartLifecycle {
+public class SequencerLink implements SequencerPort, SmartLifecycle {
 
     private static final Logger log = LoggerFactory.getLogger(SequencerLink.class);
 

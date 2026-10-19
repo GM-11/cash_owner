@@ -42,3 +42,11 @@ cash-owner:
     max-pending-requests: 10000
     check-invariants: true      # dev: on. Costs O(all orders) per job, so turn off under load tests / prod
     shutdown-drain: 5s
+  dev-seed:
+    accounts:
+      - id: 1
+        cash-minor: 10000000     # Rs 1,00,000
+        shares: { "1": 500 }
+      - id: 2
+        cash-minor: 10000000
+        shares: { "1": 500 }
