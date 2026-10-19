@@ -38,3 +38,7 @@ cash-owner:
     enabled: true
     reconnect-min: 100ms
     reconnect-max: 5s
+  owner:
+    max-pending-requests: 10000
+    check-invariants: true      # dev: on. Costs O(all orders) per job, so turn off under load tests / prod
+    shutdown-drain: 5s

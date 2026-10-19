@@ -8,15 +8,20 @@ import java.util.Map;
 import java.util.Optional;
 
 import com.protrader.cash_owner.models.Account;
+import com.protrader.cash_owner.models.AccountView;
 import com.protrader.cash_owner.models.EngineRef;
 import com.protrader.cash_owner.models.Holding;
 import com.protrader.cash_owner.models.Order;
 import com.protrader.cash_owner.models.OrderKey;
 import com.protrader.cash_owner.models.OrderStage;
+import com.protrader.cash_owner.models.OrderView;
 import com.protrader.cash_owner.models.PlaceResult;
 import com.protrader.cash_owner.models.RejectReason;
 import com.protrader.cash_owner.models.Side;
 
+/**
+ * Not thread-safe by design: only the LedgerOwner thread may call it. Returns copies only.
+ */
 public final class Ledger {
     private final Map<Long, Account> accounts = new HashMap<>();
     private final Map<OrderKey, Order> orders = new LinkedHashMap<>();
@@ -48,7 +53,7 @@ public final class Ledger {
         OrderKey key = new OrderKey(accountId, clientOrderId);
         Order existing = orders.get(key);
         if (existing != null) {
-            return new PlaceResult.Duplicate(existing);
+            return new PlaceResult.Duplicate(OrderView.of(existing));
         }
 
         Account account = accounts.get(accountId);
@@ -87,7 +92,7 @@ public final class Ledger {
 
         Order order = new Order(key, symbol, side, limitPriceMinor, qty);
         orders.put(key, order);
-        return new PlaceResult.Locked(order);
+        return new PlaceResult.Locked(OrderView.of(order));
     }
 
     public void onAccepted(OrderKey key, long orderId) {
@@ -140,27 +145,27 @@ public final class Ledger {
         }
     }
 
-    public List<Order> inDoubt() {
-        List<Order> result = new ArrayList<>();
+    public List<OrderView> inDoubt() {
+        List<OrderView> result = new ArrayList<>();
         for (Order order : orders.values()) {
             if (order.getStage() == OrderStage.IN_DOUBT) {
-                result.add(order);
+                result.add(OrderView.of(order));
             }
         }
         return result;
     }
 
-    public Optional<Account> account(long accountId) {
-        return Optional.ofNullable(accounts.get(accountId));
+    public Optional<AccountView> account(long accountId) {
+        return Optional.ofNullable(accounts.get(accountId)).map(AccountView::of);
     }
 
-    public Optional<Order> order(OrderKey key) {
-        return Optional.ofNullable(orders.get(key));
+    public Optional<OrderView> order(OrderKey key) {
+        return Optional.ofNullable(orders.get(key)).map(OrderView::of);
     }
 
-    public Optional<Order> orderByEngineRef(EngineRef ref) {
+    public Optional<OrderView> orderByEngineRef(EngineRef ref) {
         OrderKey key = byEngineRef.get(ref);
-        return key == null ? Optional.empty() : Optional.ofNullable(orders.get(key));
+        return key == null ? Optional.empty() : Optional.ofNullable(orders.get(key)).map(OrderView::of);
     }
 
     public void checkInvariants() {

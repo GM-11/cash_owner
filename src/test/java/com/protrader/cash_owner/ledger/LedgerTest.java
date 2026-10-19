@@ -2,7 +2,6 @@ package com.protrader.cash_owner.ledger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -10,12 +9,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 
-import com.protrader.cash_owner.models.Account;
+import com.protrader.cash_owner.models.AccountView;
 import com.protrader.cash_owner.models.EngineRef;
-import com.protrader.cash_owner.models.Holding;
-import com.protrader.cash_owner.models.Order;
+import com.protrader.cash_owner.models.HoldingView;
 import com.protrader.cash_owner.models.OrderKey;
 import com.protrader.cash_owner.models.OrderStage;
+import com.protrader.cash_owner.models.OrderView;
 import com.protrader.cash_owner.models.PlaceResult;
 import com.protrader.cash_owner.models.RejectReason;
 import com.protrader.cash_owner.models.Side;
@@ -35,11 +34,11 @@ class LedgerTest {
         PlaceResult result = ledger.place(1, "a", SYMBOL, Side.BUY, 10_000, 10);
 
         assertTrue(result instanceof PlaceResult.Locked);
-        Order order = ((PlaceResult.Locked) result).order();
-        Account account = ledger.account(1).orElseThrow();
-        assertEquals(400_000, account.getFreeCashMinor());
-        assertEquals(100_000, account.getLockedCashMinor());
-        assertEquals(OrderStage.SENT, order.getStage());
+        OrderView order = ((PlaceResult.Locked) result).order();
+        AccountView account = ledger.account(1).orElseThrow();
+        assertEquals(400_000, account.freeCashMinor());
+        assertEquals(100_000, account.lockedCashMinor());
+        assertEquals(OrderStage.SENT, order.stage());
         ledger.checkInvariants();
     }
 
@@ -54,9 +53,9 @@ class LedgerTest {
         PlaceResult.Rejected rejected = (PlaceResult.Rejected) result;
         assertEquals(RejectReason.INSUFFICIENT_CASH, rejected.reason());
         assertEquals(100_000, rejected.shortfallMinor());
-        Account account = ledger.account(1).orElseThrow();
-        assertEquals(500_000, account.getFreeCashMinor());
-        assertEquals(0, account.getLockedCashMinor());
+        AccountView account = ledger.account(1).orElseThrow();
+        assertEquals(500_000, account.freeCashMinor());
+        assertEquals(0, account.lockedCashMinor());
         assertTrue(ledger.order(new OrderKey(1, "a")).isEmpty());
         ledger.checkInvariants();
     }
@@ -70,9 +69,9 @@ class LedgerTest {
 
         assertTrue(result instanceof PlaceResult.Rejected);
         assertEquals(RejectReason.INSUFFICIENT_HOLDINGS, ((PlaceResult.Rejected) result).reason());
-        Account account = ledger.account(1).orElseThrow();
-        assertEquals(3, account.getHoldings().get(SYMBOL).getFreeQty());
-        assertEquals(0, account.getHoldings().get(SYMBOL).getLockedQty());
+        AccountView account = ledger.account(1).orElseThrow();
+        assertEquals(3, account.holdings().get(SYMBOL).freeQty());
+        assertEquals(0, account.holdings().get(SYMBOL).lockedQty());
         ledger.checkInvariants();
     }
 
@@ -84,25 +83,25 @@ class LedgerTest {
         PlaceResult result = ledger.place(1, "a", SYMBOL, Side.SELL, 10_000, 3);
 
         assertTrue(result instanceof PlaceResult.Locked);
-        Account account = ledger.account(1).orElseThrow();
-        assertEquals(2, account.getHoldings().get(SYMBOL).getFreeQty());
-        assertEquals(3, account.getHoldings().get(SYMBOL).getLockedQty());
+        AccountView account = ledger.account(1).orElseThrow();
+        assertEquals(2, account.holdings().get(SYMBOL).freeQty());
+        assertEquals(3, account.holdings().get(SYMBOL).lockedQty());
         ledger.checkInvariants();
     }
 
     @Test
-    void placingSameKeyTwiceReturnsSameOrderInstanceAndLocksOnce() {
+    void placingSameKeyTwiceReturnsSameOrderAndLocksOnce() {
         Ledger ledger = new Ledger();
         ledger.openAccount(1, 500_000, Map.of());
 
         PlaceResult first = ledger.place(1, "a", SYMBOL, Side.BUY, 10_000, 10);
         PlaceResult second = ledger.place(1, "a", SYMBOL, Side.BUY, 10_000, 10);
 
-        Order order = ((PlaceResult.Locked) first).order();
+        OrderView order = ((PlaceResult.Locked) first).order();
         assertTrue(second instanceof PlaceResult.Duplicate);
-        assertSame(order, ((PlaceResult.Duplicate) second).existing());
-        Account account = ledger.account(1).orElseThrow();
-        assertEquals(100_000, account.getLockedCashMinor());
+        assertEquals(order, ((PlaceResult.Duplicate) second).existing());
+        AccountView account = ledger.account(1).orElseThrow();
+        assertEquals(100_000, account.lockedCashMinor());
         ledger.checkInvariants();
     }
 
@@ -129,10 +128,10 @@ class LedgerTest {
 
         ledger.onRefused(key);
 
-        Account account = ledger.account(1).orElseThrow();
-        assertEquals(500_000, account.getFreeCashMinor());
-        assertEquals(0, account.getLockedCashMinor());
-        assertEquals(OrderStage.DONE, ledger.order(key).orElseThrow().getStage());
+        AccountView account = ledger.account(1).orElseThrow();
+        assertEquals(500_000, account.freeCashMinor());
+        assertEquals(0, account.lockedCashMinor());
+        assertEquals(OrderStage.DONE, ledger.order(key).orElseThrow().stage());
         ledger.checkInvariants();
     }
 
@@ -145,11 +144,11 @@ class LedgerTest {
 
         ledger.onNoAnswer(key);
 
-        Order order = ledger.order(key).orElseThrow();
-        assertEquals(OrderStage.IN_DOUBT, order.getStage());
-        Account account = ledger.account(1).orElseThrow();
-        assertEquals(400_000, account.getFreeCashMinor());
-        assertEquals(100_000, account.getLockedCashMinor());
+        OrderView order = ledger.order(key).orElseThrow();
+        assertEquals(OrderStage.IN_DOUBT, order.stage());
+        AccountView account = ledger.account(1).orElseThrow();
+        assertEquals(400_000, account.freeCashMinor());
+        assertEquals(100_000, account.lockedCashMinor());
         assertEquals(List.of(order), ledger.inDoubt());
         ledger.checkInvariants();
     }
@@ -164,9 +163,9 @@ class LedgerTest {
 
         ledger.onAccepted(key, 812);
 
-        Order order = ledger.order(key).orElseThrow();
-        assertEquals(OrderStage.OPEN, order.getStage());
-        assertEquals(812, order.getOrderId());
+        OrderView order = ledger.order(key).orElseThrow();
+        assertEquals(OrderStage.OPEN, order.stage());
+        assertEquals(812, order.orderId());
         assertTrue(ledger.inDoubt().isEmpty());
         assertEquals(order, ledger.orderByEngineRef(new EngineRef(SYMBOL, 812)).orElseThrow());
         ledger.checkInvariants();
@@ -184,12 +183,12 @@ class LedgerTest {
         ledger.onRefused(key);
         ledger.onNoAnswer(key);
 
-        Order order = ledger.order(key).orElseThrow();
-        assertEquals(OrderStage.OPEN, order.getStage());
-        assertEquals(812, order.getOrderId());
-        Account account = ledger.account(1).orElseThrow();
-        assertEquals(400_000, account.getFreeCashMinor());
-        assertEquals(100_000, account.getLockedCashMinor());
+        OrderView order = ledger.order(key).orElseThrow();
+        assertEquals(OrderStage.OPEN, order.stage());
+        assertEquals(812, order.orderId());
+        AccountView account = ledger.account(1).orElseThrow();
+        assertEquals(400_000, account.freeCashMinor());
+        assertEquals(100_000, account.lockedCashMinor());
         ledger.checkInvariants();
     }
 
@@ -204,9 +203,9 @@ class LedgerTest {
         PlaceResult.Rejected rejected = (PlaceResult.Rejected) result;
         assertEquals(RejectReason.INSUFFICIENT_CASH, rejected.reason());
         assertEquals(Long.MAX_VALUE, rejected.shortfallMinor());
-        Account account = ledger.account(1).orElseThrow();
-        assertEquals(500_000, account.getFreeCashMinor());
-        assertEquals(0, account.getLockedCashMinor());
+        AccountView account = ledger.account(1).orElseThrow();
+        assertEquals(500_000, account.freeCashMinor());
+        assertEquals(0, account.lockedCashMinor());
         ledger.checkInvariants();
     }
 
@@ -239,11 +238,11 @@ class LedgerTest {
         ledger.onRefused(new OrderKey(1, "buy"));
         ledger.onRefused(new OrderKey(1, "sell"));
 
-        Account account = ledger.account(1).orElseThrow();
-        assertEquals(500_000, account.getFreeCashMinor());
-        assertEquals(0, account.getLockedCashMinor());
-        assertEquals(5, account.getHoldings().get(SYMBOL).getFreeQty());
-        assertEquals(0, account.getHoldings().get(SYMBOL).getLockedQty());
+        AccountView account = ledger.account(1).orElseThrow();
+        assertEquals(500_000, account.freeCashMinor());
+        assertEquals(0, account.lockedCashMinor());
+        assertEquals(5, account.holdings().get(SYMBOL).freeQty());
+        assertEquals(0, account.holdings().get(SYMBOL).lockedQty());
         ledger.checkInvariants();
     }
 
@@ -338,13 +337,13 @@ class LedgerTest {
             ledger.checkInvariants();
 
             for (int a = 1; a <= accountCount; a++) {
-                Account account = ledger.account((long) a).orElseThrow();
-                long totalCash = account.getFreeCashMinor() + account.getLockedCashMinor();
+                AccountView account = ledger.account((long) a).orElseThrow();
+                long totalCash = account.freeCashMinor() + account.lockedCashMinor();
                 assertEquals(startingTotalCash[a - 1], totalCash,
                         "total cash changed for account " + a + " at step " + i);
                 for (int s = 0; s < symbolCount; s++) {
-                    Holding holding = account.getHoldings().get(s);
-                    long totalShares = holding == null ? 0 : holding.getFreeQty() + holding.getLockedQty();
+                    HoldingView holding = account.holdings().get(s);
+                    long totalShares = holding == null ? 0 : holding.freeQty() + holding.lockedQty();
                     assertEquals(startingTotalShares[a - 1][s], totalShares,
                             "total shares changed for account " + a + " symbol " + s + " at step " + i);
                 }
