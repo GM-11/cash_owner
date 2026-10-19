@@ -1,4 +1,4 @@
-package com.protrader.cash_owner.ledger;
+package com.protrader.cash_owner.models;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -7,11 +7,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-/**
- * Balances, order locks, and reactions to the sequencer's answer.
- *
- * <p>NOT thread-safe by design: exactly one owner thread calls it.
- */
 public final class Ledger {
     private final Map<Long, Account> accounts = new HashMap<>();
     private final Map<OrderKey, Order> orders = new LinkedHashMap<>();
@@ -95,7 +90,8 @@ public final class Ledger {
         EngineRef ref = new EngineRef(order.symbol, orderId);
         OrderKey clashing = byEngineRef.get(ref);
         if (clashing != null && !clashing.equals(key)) {
-            throw new IllegalStateException("engine ref " + ref + " already maps to " + clashing + ", cannot also map to " + key);
+            throw new IllegalStateException(
+                    "engine ref " + ref + " already maps to " + clashing + ", cannot also map to " + key);
         }
         order.orderId = orderId;
         order.stage = OrderStage.OPEN;
@@ -174,7 +170,8 @@ public final class Ledger {
         Map<Long, Long> expectedLockedCash = new HashMap<>();
         Map<Long, Map<Integer, Long>> expectedLockedQty = new HashMap<>();
         for (Order order : orders.values()) {
-            if (order.stage != OrderStage.SENT && order.stage != OrderStage.IN_DOUBT && order.stage != OrderStage.OPEN) {
+            if (order.stage != OrderStage.SENT && order.stage != OrderStage.IN_DOUBT
+                    && order.stage != OrderStage.OPEN) {
                 continue;
             }
             long accountId = order.key.accountId();

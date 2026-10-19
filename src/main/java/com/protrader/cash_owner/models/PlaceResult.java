@@ -1,4 +1,4 @@
-package com.protrader.cash_owner.ledger;
+package com.protrader.cash_owner.models;
 
 public sealed interface PlaceResult {
     record Locked(Order order) implements PlaceResult {

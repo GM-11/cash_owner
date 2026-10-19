@@ -1,4 +1,4 @@
-package com.protrader.cash_owner.ledger;
+package com.protrader.cash_owner.models;
 
 public enum OrderStage {
     /** locked, sent to the sequencer, awaiting ack */

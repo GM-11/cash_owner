@@ -1,4 +1,4 @@
-package com.protrader.cash_owner.ledger;
+package com.protrader.cash_owner.models;
 
 public final class Order {
     final OrderKey key;
