@@ -2,6 +2,8 @@
 spring:
   application:
     name: cash-owner
+  main:
+    web-application-type: none          # gRPC (Netty) only; no Tomcat, so port 8080 stays free for the order gateway
 
   grpc:
     server:
@@ -48,5 +50,11 @@ cash-owner:
         cash-minor: 10000000     # Rs 1,00,000
         shares: { "1": 500 }
       - id: 2
+        cash-minor: 10000000
+        shares: { "1": 500 }
+      - id: 10                   # account of the dev API key in order_gateway/devkeys/keys.json
+        cash-minor: 10000000
+        shares: { "1": 500 }
+      - id: 21                   # account of the second dev API key (PKNK3...)
         cash-minor: 10000000
         shares: { "1": 500 }

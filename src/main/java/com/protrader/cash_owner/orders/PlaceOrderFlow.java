@@ -30,15 +30,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-/**
- * PlaceOrder end to end: lock in the Ledger, submit to the sequencer, answer the caller when the sequencer answers,
- * and resend in-doubt orders when the stream comes back.
- *
- * <p>
- * Threading: every method named {@code *Job}, {@code onAck}, {@code onStreamLost} and {@code onStreamOpened} runs
- * as a {@link LedgerOwner} job, on the owner thread. Jobs never write to a gRPC stream; they return
- * {@link Outgoing} replies and the caller sends them from a {@code ledger-reply-*} thread.
- */
 @Component
 public class PlaceOrderFlow {
 
@@ -62,10 +53,6 @@ public class PlaceOrderFlow {
     private final LedgerOwner owner;
     private final SequencerPort port;
 
-    /**
-     * OWNER THREAD ONLY (no locks, no concurrent collections). Exactly the orders whose Ledger stage is SENT
-     * (caller != null) or IN_DOUBT (caller == null).
-     */
     private final Map<OrderKey, InFlight> inFlight = new LinkedHashMap<>();
 
     public PlaceOrderFlow(LedgerOwner owner, SequencerPort port) {
@@ -79,8 +66,6 @@ public class PlaceOrderFlow {
                 .exceptionally(this::logFailure));
     }
 
-    // ------------------------------------------------------------------ entry point (gRPC thread)
-
     public void place(PlaceOrderRequest req, StreamObserver<PlaceOrderAck> caller) {
         owner.request(l -> placeJob(l, req, caller)).whenComplete((replies, error) -> {
             if (error == null) {
@@ -90,7 +75,8 @@ public class PlaceOrderFlow {
             Throwable cause = error instanceof CompletionException && error.getCause() != null ? error.getCause()
                     : error;
             if (cause instanceof OwnerBusyException) {
-                sendAll(List.of(new Outgoing.Answer(caller, refused(CashRejectReason.CASH_REJECT_REASON_EXCHANGE_BUSY))));
+                sendAll(List
+                        .of(new Outgoing.Answer(caller, refused(CashRejectReason.CASH_REJECT_REASON_EXCHANGE_BUSY))));
             } else if (cause instanceof OwnerUnavailableException) {
                 fail(caller, Status.UNAVAILABLE.withDescription("cash owner is unavailable; nothing was done"));
             } else {
@@ -100,8 +86,6 @@ public class PlaceOrderFlow {
             }
         });
     }
-
-    // ------------------------------------------------------------------ jobs (owner thread)
 
     private List<Outgoing> placeJob(Ledger l, PlaceOrderRequest req, StreamObserver<PlaceOrderAck> caller) {
         OrderKey key = new OrderKey(req.getAccountId(), req.getClientOrderId());
@@ -159,7 +143,8 @@ public class PlaceOrderFlow {
                     l.onAccepted(key, ack.getSeq());
                     inFlight.remove(key);
                     return resent ? List.of()
-                            : List.of(new Outgoing.Answer(caller, PlaceOrderAck.newBuilder().setAccepted(true).build()));
+                            : List.of(
+                                    new Outgoing.Answer(caller, PlaceOrderAck.newBuilder().setAccepted(true).build()));
                 }
                 log.error("ACCEPTED ack with seq 0, treating it as no answer: {}", ack);
                 return noAnswer(l, key, f, resent);
@@ -172,7 +157,7 @@ public class PlaceOrderFlow {
             }
             case SUBMIT_STATUS_NOT_RUNNING -> {
                 if (resent) {
-                    // answered before the dedupe check, so not a definite no for an order we may have sent already
+
                     log.info("NOT_RUNNING for a resent order {}: staying in doubt", key);
                     return List.of();
                 }
@@ -238,8 +223,6 @@ public class PlaceOrderFlow {
     private static PlaceOrderAck refused(CashRejectReason reason) {
         return PlaceOrderAck.newBuilder().setAccepted(false).setReason(reason).build();
     }
-
-    // ------------------------------------------------------------------ sending (reply thread)
 
     private void sendAll(List<Outgoing> replies) {
         for (Outgoing reply : replies) {

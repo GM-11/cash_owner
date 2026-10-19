@@ -4,6 +4,14 @@ import com.protrader.cash_owner.config.CashOwnerProperties;
 import com.protrader.proto.exchange.v1.SequencerGrpc;
 import com.protrader.proto.exchange.v1.SubmitAck;
 import com.protrader.proto.exchange.v1.SubmitRequest;
+import io.grpc.CallOptions;
+import io.grpc.Channel;
+import io.grpc.ClientCall;
+import io.grpc.ClientInterceptor;
+import io.grpc.ForwardingClientCall;
+import io.grpc.ForwardingClientCallListener;
+import io.grpc.Metadata;
+import io.grpc.MethodDescriptor;
 import io.grpc.stub.StreamObserver;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -30,7 +38,8 @@ public class SequencerLink implements SequencerPort, SmartLifecycle {
     private volatile Runnable onStreamLost = () -> {
     };
 
-    private StreamObserver<SubmitRequest> out; // guarded by this; null = stream down
+    private StreamObserver<SubmitRequest> out; // guarded by this; null = no stream that has opened (headers seen)
+    private Attempt current; // guarded by this; the attempt in progress or open
     private boolean running; // guarded by this
     private long backoffMs; // guarded by this
 
@@ -84,7 +93,8 @@ public class SequencerLink implements SequencerPort, SmartLifecycle {
         StreamObserver<SubmitRequest> toClose;
         synchronized (this) {
             running = false;
-            toClose = out;
+            toClose = current == null ? null : current.requests; // open, or still waiting for headers
+            current = null;
             out = null;
         }
         if (toClose != null) {
@@ -102,14 +112,22 @@ public class SequencerLink implements SequencerPort, SmartLifecycle {
         return running;
     }
 
+    /** One connection attempt. All fields guarded by the link. */
+    private static final class Attempt {
+        StreamObserver<SubmitRequest> requests; // set once stub.submit(...) has returned
+        boolean headersSeen;
+        boolean open;
+    }
+
     private void connect() {
+        Attempt attempt = new Attempt();
         synchronized (this) {
             if (!running) {
                 return;
             }
+            current = attempt;
         }
 
-        final StreamObserver<SubmitRequest>[] mine = new StreamObserver[1];
         StreamObserver<SubmitAck> responses = new StreamObserver<>() {
             @Override
             public void onNext(SubmitAck ack) {
@@ -121,42 +139,119 @@ public class SequencerLink implements SequencerPort, SmartLifecycle {
 
             @Override
             public void onError(Throwable t) {
-                lost(mine[0], t.toString());
+                closed(attempt, t.toString());
             }
 
             @Override
             public void onCompleted() {
-                lost(mine[0], "server closed the stream");
+                closed(attempt, "server closed the stream");
             }
         };
-        StreamObserver<SubmitRequest> requests = stub.submit(responses);
+        // The call is not "open" until the server's headers arrive: a connect to a dead
+        // or wrong address would
+        // otherwise look open, and orders sent into it would end up in doubt.
+        StreamObserver<SubmitRequest> pending = stub.withInterceptors(new HeadersInterceptor(attempt))
+                .submit(responses);
+        boolean opened;
         synchronized (this) {
-            mine[0] = requests;
+            if (current != attempt) {
+                return; // it already failed (closed() has scheduled the reconnect), or we were stopped
+            }
+            attempt.requests = pending;
             if (!running) {
-                requests.onCompleted();
+                current = null;
+                pending.onCompleted();
                 return;
             }
-            out = requests;
+            opened = tryOpen(attempt);
         }
+        if (opened) {
+            announceOpen();
+        }
+    }
+
+    /** Headers arrived on this attempt's call (any thread). */
+    private void headersArrived(Attempt attempt) {
+        boolean opened;
+        synchronized (this) {
+            attempt.headersSeen = true;
+            opened = tryOpen(attempt);
+        }
+        if (opened) {
+            announceOpen();
+        }
+    }
+
+    /**
+     * Must hold the lock. True exactly once per attempt: this call made it the open
+     * stream.
+     */
+    private boolean tryOpen(Attempt attempt) {
+        if (current != attempt || !running || attempt.open || !attempt.headersSeen || attempt.requests == null) {
+            return false;
+        }
+        attempt.open = true;
+        out = attempt.requests;
+        return true;
+    }
+
+    private void announceOpen() {
         log.info("sequencer stream started");
         onStreamOpened.run();
     }
 
-    private void lost(StreamObserver<SubmitRequest> stream, String why) {
+    private void closed(Attempt attempt, String why) {
         long delay;
+        boolean wasOpen;
         synchronized (this) {
-            if (stream == null || out != stream) {
-                return; // an old stream, already replaced
+            if (current != attempt) {
+                return; // an old attempt, already replaced, or we were stopped
             }
-            out = null;
+            current = null;
+            wasOpen = attempt.open;
+            if (wasOpen) {
+                out = null;
+            }
             if (!running) {
                 return;
             }
             delay = backoffMs;
             backoffMs = Math.min(backoffMs * 2, cfg.reconnectMax().toMillis());
         }
-        log.warn("sequencer stream lost ({}); reconnecting in {} ms", why, delay);
-        onStreamLost.run();
+        if (wasOpen) {
+            log.warn("sequencer stream lost ({}); reconnecting in {} ms", why, delay);
+            onStreamLost.run();
+        } else {
+            // never open, so nothing was lost: no onStreamLost
+            log.warn("sequencer stream failed before it opened ({}); reconnecting in {} ms", why, delay);
+        }
         timer.schedule(this::connect, delay, TimeUnit.MILLISECONDS);
+    }
+
+    /** Tells the link when the server's headers arrive for one specific call. */
+    private final class HeadersInterceptor implements ClientInterceptor {
+        private final Attempt attempt;
+
+        HeadersInterceptor(Attempt attempt) {
+            this.attempt = attempt;
+        }
+
+        @Override
+        public <ReqT, RespT> ClientCall<ReqT, RespT> interceptCall(MethodDescriptor<ReqT, RespT> method,
+                CallOptions callOptions, Channel next) {
+            return new ForwardingClientCall.SimpleForwardingClientCall<>(next.newCall(method, callOptions)) {
+                @Override
+                public void start(ClientCall.Listener<RespT> responseListener, Metadata headers) {
+                    super.start(new ForwardingClientCallListener.SimpleForwardingClientCallListener<>(
+                            responseListener) {
+                        @Override
+                        public void onHeaders(Metadata headers) {
+                            headersArrived(attempt);
+                            super.onHeaders(headers);
+                        }
+                    }, headers);
+                }
+            };
+        }
     }
 }
