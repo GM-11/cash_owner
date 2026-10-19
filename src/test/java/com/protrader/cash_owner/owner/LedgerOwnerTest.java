@@ -144,7 +144,8 @@ class LedgerOwnerTest {
     // 4
     @RepeatedTest(20)
     void manyThreadsPlacingAndRefusingNeverChangeTotalMoney() throws Exception {
-        // checkInvariants() scans every order, and this test creates 16,000 of them, so the full check runs on
+        // checkInvariants() scans every order, and this test creates 16,000 of them, so
+        // the full check runs on
         // every 50th job (plus once at the end). Test 7 covers "check after every job".
         AtomicInteger jobsRun = new AtomicInteger(); // only the owner thread touches it
         replaceOwner(new Settings(10_000, true, Duration.ofSeconds(5)), l -> {
