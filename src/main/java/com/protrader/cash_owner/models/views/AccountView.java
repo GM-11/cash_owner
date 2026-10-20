@@ -1,7 +1,9 @@
-package com.protrader.cash_owner.models;
+package com.protrader.cash_owner.models.views;
 
 import java.util.HashMap;
 import java.util.Map;
+
+import com.protrader.cash_owner.models.Account;
 
 /** Read-only copy of an {@link Account}. Safe to hand to any thread. */
 public record AccountView(long accountId, long freeCashMinor, long lockedCashMinor,
