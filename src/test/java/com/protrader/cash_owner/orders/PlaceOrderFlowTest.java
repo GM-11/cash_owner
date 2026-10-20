@@ -4,10 +4,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.protrader.cash_owner.models.AccountView;
 import com.protrader.cash_owner.models.OrderKey;
 import com.protrader.cash_owner.models.OrderStage;
-import com.protrader.cash_owner.models.OrderView;
+import com.protrader.cash_owner.models.views.AccountView;
+import com.protrader.cash_owner.models.views.OrderView;
 import com.protrader.cash_owner.owner.LedgerOwner;
 import com.protrader.cash_owner.owner.LedgerOwner.Settings;
 import com.protrader.cash_owner.services.Ledger;
@@ -89,14 +89,20 @@ class PlaceOrderFlowTest {
         return caller;
     }
 
-    /** Places and waits until the order has reached the sequencer (or been answered). */
+    /**
+     * Places and waits until the order has reached the sequencer (or been
+     * answered).
+     */
     private FakeCaller placeAndSettle(PlaceOrderRequest request) throws Exception {
         FakeCaller caller = place(request);
         settle();
         return caller;
     }
 
-    /** Waits until the owner has run everything queued, then lets pending replies go out. */
+    /**
+     * Waits until the owner has run everything queued, then lets pending replies go
+     * out.
+     */
     private void settle() throws Exception {
         owner.followUp(l -> null).get(5, TimeUnit.SECONDS);
         owner.followUp(l -> null).get(5, TimeUnit.SECONDS);

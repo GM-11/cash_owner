@@ -9,15 +9,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 
-import com.protrader.cash_owner.models.AccountView;
 import com.protrader.cash_owner.models.EngineRef;
-import com.protrader.cash_owner.models.HoldingView;
 import com.protrader.cash_owner.models.OrderKey;
 import com.protrader.cash_owner.models.OrderStage;
-import com.protrader.cash_owner.models.OrderView;
 import com.protrader.cash_owner.models.PlaceResult;
 import com.protrader.cash_owner.models.RejectReason;
 import com.protrader.cash_owner.models.Side;
+import com.protrader.cash_owner.models.views.AccountView;
+import com.protrader.cash_owner.models.views.HoldingView;
+import com.protrader.cash_owner.models.views.OrderView;
 import com.protrader.cash_owner.services.Ledger;
 
 import org.junit.jupiter.api.Test;

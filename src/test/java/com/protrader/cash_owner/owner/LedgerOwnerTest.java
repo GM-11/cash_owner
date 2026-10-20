@@ -28,10 +28,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
-import com.protrader.cash_owner.models.AccountView;
 import com.protrader.cash_owner.models.OrderKey;
 import com.protrader.cash_owner.models.PlaceResult;
 import com.protrader.cash_owner.models.Side;
+import com.protrader.cash_owner.models.views.AccountView;
 import com.protrader.cash_owner.owner.LedgerOwner.Settings;
 import com.protrader.cash_owner.services.Ledger;
 
