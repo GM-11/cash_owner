@@ -1,7 +1,7 @@
 package com.protrader.cash_owner.grpc;
 
-import com.protrader.cash_owner.models.OrderView;
 import com.protrader.cash_owner.models.RejectReason;
+import com.protrader.cash_owner.models.views.OrderView;
 import com.protrader.proto.exchange.v1.CashRejectReason;
 import com.protrader.proto.exchange.v1.OrderState;
 import com.protrader.proto.exchange.v1.OrderStatus;
