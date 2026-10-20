@@ -7,22 +7,27 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.protrader.cash_owner.models.Account;
-import com.protrader.cash_owner.models.AccountView;
+import com.protrader.cash_owner.models.DoneReason;
+import com.protrader.cash_owner.models.EngineEvent;
 import com.protrader.cash_owner.models.EngineRef;
 import com.protrader.cash_owner.models.Holding;
 import com.protrader.cash_owner.models.Order;
 import com.protrader.cash_owner.models.OrderKey;
 import com.protrader.cash_owner.models.OrderStage;
-import com.protrader.cash_owner.models.OrderView;
+import com.protrader.cash_owner.models.Outcome;
 import com.protrader.cash_owner.models.PlaceResult;
 import com.protrader.cash_owner.models.RejectReason;
 import com.protrader.cash_owner.models.Side;
+import com.protrader.cash_owner.models.views.AccountView;
+import com.protrader.cash_owner.models.views.OrderView;
 
-/**
- * Not thread-safe by design: only the LedgerOwner thread may call it. Returns copies only.
- */
 public final class Ledger {
+    private static final Logger log = LoggerFactory.getLogger(Ledger.class);
+
     private final Map<Long, Account> accounts = new HashMap<>();
     private final Map<OrderKey, Order> orders = new LinkedHashMap<>();
     private final Map<EngineRef, OrderKey> byEngineRef = new HashMap<>();
@@ -120,8 +125,10 @@ public final class Ledger {
             return;
         }
         releaseLock(order);
-        // A refused order was never stored by the sequencer, so forget it here too: a retry with the same
-        // client_order_id must be a fresh order, not a Duplicate. It has no byEngineRef entry yet.
+        // A refused order was never stored by the sequencer, so forget it here too: a
+        // retry with the same
+        // client_order_id must be a fresh order, not a Duplicate. It has no byEngineRef
+        // entry yet.
         orders.remove(key);
     }
 
@@ -233,5 +240,262 @@ public final class Ledger {
                 throw new IllegalStateException("byEngineRef entry " + ref + " does not match its order");
             }
         }
+
+        for (Order order : orders.values()) {
+            if (order.getStage() == OrderStage.DONE && order.getRemainingQty() != 0) {
+                throw new IllegalStateException("DONE order " + order.getKey() + " still has remaining qty "
+                        + order.getRemainingQty());
+            }
+        }
+    }
+
+    /**
+     * Every check a fill must pass. Throws, never changes anything. Returns the
+     * order the fill is for.
+     * Split out of onFill so a TRADE can check both of its sides before settling
+     * either one.
+     */
+    private Order checkFill(EngineRef ref, long tradePriceMinor, long qty) {
+        Order order = orders.get(byEngineRef.get(ref));
+        if (order == null) {
+            throw new IllegalStateException("no order for ref " + ref);
+        }
+        if (order.getStage() != OrderStage.OPEN) {
+            throw new IllegalStateException("order " + order.getKey() + " for ref " + ref + " is " + order.getStage()
+                    + ", not OPEN");
+        }
+
+        long accountId = order.getKey().accountId();
+        Account account = accounts.get(accountId);
+        if (account == null) {
+            throw new IllegalStateException("unknown account " + accountId);
+        }
+
+        if (tradePriceMinor <= 0) {
+            throw new IllegalArgumentException("trade price must be positive");
+        }
+        if (qty <= 0) {
+            throw new IllegalArgumentException("qty must be positive");
+        }
+        if (qty > order.getRemainingQty()) {
+            throw new IllegalArgumentException("qty " + qty + " exceeds remaining qty " + order.getRemainingQty());
+        }
+
+        long limitPrice = order.getLimitPriceMinor();
+        if (order.getSide() == Side.BUY) {
+            if (tradePriceMinor > limitPrice) {
+                throw new IllegalArgumentException(
+                        "buy filled at " + tradePriceMinor + ", above its limit " + limitPrice);
+            }
+        } else {
+            if (account.getHoldings().get(order.getSymbol()) == null) {
+                throw new IllegalStateException("no holding for symbol " + order.getSymbol());
+            }
+            if (tradePriceMinor < limitPrice) {
+                throw new IllegalArgumentException(
+                        "sell filled at " + tradePriceMinor + ", below its limit " + limitPrice);
+            }
+        }
+
+        // the amounts onFill will compute; checked here so an overflow throws before
+        // anything changes
+        Math.multiplyExact(tradePriceMinor, qty);
+        Math.multiplyExact(limitPrice, qty);
+        return order;
+    }
+
+    public void onFill(EngineRef ref, long tradePriceMinor, long qty) {
+        Order order = checkFill(ref, tradePriceMinor, qty);
+        Account account = accounts.get(order.getKey().accountId());
+
+        long remaining = order.getRemainingQty();
+        long limitPrice = order.getLimitPriceMinor();
+        long priceTimesQty = Math.multiplyExact(tradePriceMinor, qty);
+
+        if (order.getSide() == Side.BUY) {
+            Holding holding = account.getHoldingFromSymbol(order.getSymbol());
+
+            long lockReleased = Math.multiplyExact(limitPrice, qty);
+            long priceImprovement = Math.subtractExact(limitPrice, tradePriceMinor);
+            long refund = Math.multiplyExact(priceImprovement, qty);
+
+            account.setLockedCashMinor(account.getLockedCashMinor() - lockReleased);
+            account.setFreeCashMinor(account.getFreeCashMinor() + refund);
+            holding.setFreeQty(holding.getFreeQty() + qty);
+        } else {
+            Holding holding = account.getHoldings().get(order.getSymbol());
+            long proceeds = priceTimesQty;
+
+            account.setFreeCashMinor(account.getFreeCashMinor() + proceeds);
+            holding.setLockedQty(holding.getLockedQty() - qty);
+        }
+
+        order.setRemainingQty(remaining - qty);
+        if (order.getRemainingQty() == 0) {
+            order.setStage(OrderStage.DONE);
+            order.setDoneReason(DoneReason.FILLED);
+        }
+        order.setFilledQty(order.getFilledQty() + qty);
+        order.setFilledNotionalMinor(order.getFilledNotionalMinor() + priceTimesQty);
+    }
+
+    public void onRemainderEnded(EngineRef ref, long qty, DoneReason reason) {
+        if (reason != DoneReason.CANCELED && reason != DoneReason.EXPIRED) {
+            throw new IllegalArgumentException("reason must be CANCELED or EXPIRED: " + reason);
+        }
+
+        Order order = orders.get(byEngineRef.get(ref));
+        if (order == null) {
+            throw new IllegalStateException("no order for ref " + ref);
+        }
+
+        if (order.getStage() != OrderStage.OPEN) {
+            throw new IllegalStateException("order " + order.getKey() + " for ref " + ref + " is "
+                    + order.getStage() + ", not OPEN");
+        }
+
+        long remaining = order.getRemainingQty();
+        if (remaining != qty) {
+            throw new IllegalStateException("remaining qty mismatch: " + remaining + " != " + qty);
+        }
+        this.releaseLock(order);
+        order.setRemainingQty(0);
+        order.setStage(OrderStage.DONE);
+        order.setDoneReason(reason);
+    }
+
+    public void onEngineRejected(OrderKey key, long orderId) {
+        if (orderId <= 0) {
+            throw new IllegalArgumentException("orderId must be positive: " + orderId);
+        }
+
+        Order order = orders.get(key);
+        if (order == null) {
+            throw new IllegalStateException("no order for key " + key);
+        }
+
+        if (order.getStage() != OrderStage.OPEN && order.getStage() != OrderStage.IN_DOUBT
+                && order.getStage() != OrderStage.SENT) {
+            throw new IllegalStateException("order " + key + " is already " + order.getStage()
+                    + " (" + order.getDoneReason() + "), cannot be rejected");
+        }
+
+        if (order.getOrderId() != 0 && order.getOrderId() != orderId) {
+            throw new IllegalStateException("order " + key + " has engine id " + order.getOrderId()
+                    + " but the REJECTED event names " + orderId);
+        }
+
+        if (order.getFilledQty() > 0) {
+            throw new IllegalStateException("rejected order " + key + " already has " + order.getFilledQty()
+                    + " filled");
+        }
+
+        this.releaseLock(order);
+        order.setRemainingQty(0);
+        order.setStage(OrderStage.DONE);
+        order.setDoneReason(DoneReason.REJECTED);
+        if (order.getOrderId() == 0) {
+            order.setOrderId(orderId);
+        }
+    }
+
+    public Outcome applyEngineEvent(EngineEvent e) {
+        return switch (e.kind()) {
+            case ACCEPTED -> applyAccepted(e);
+            case TRADE -> applyTrade(e);
+            case CANCELLED -> applyRemainderEnded(e, DoneReason.CANCELED);
+            case EXPIRED -> applyRemainderEnded(e, DoneReason.EXPIRED);
+            case REJECTED -> applyRejected(e);
+            case RESTED, HALTED, OTHER -> Outcome.IGNORED; // no money or shares move
+        };
+    }
+
+    private Outcome applyAccepted(EngineEvent e) {
+        OrderKey key = new OrderKey(e.ownerId(), e.clientOrderId());
+        Order order = orders.get(key);
+        if (order == null) {
+            warnNotOurs(e);
+            return Outcome.IGNORED;
+        }
+
+        if (order.getOrderId() != 0 && order.getOrderId() != e.orderId()) {
+            throw new IllegalStateException("order " + key + " has engine id " + order.getOrderId()
+                    + " but the ACCEPTED event names " + e.orderId());
+        }
+        onAccepted(key, e.orderId());
+        return Outcome.APPLIED;
+    }
+
+    private Outcome applyTrade(EngineEvent e) {
+        if (e.priceMinor() == null) {
+            throw new IllegalStateException("TRADE without a price: " + e);
+        }
+        long price = e.priceMinor();
+        EngineRef aggressorRef = new EngineRef(e.symbol(), e.orderId());
+        EngineRef passiveRef = new EngineRef(e.symbol(), e.passiveId());
+        Order aggressor = orders.get(byEngineRef.get(aggressorRef));
+        Order passive = orders.get(byEngineRef.get(passiveRef));
+
+        if (aggressor == null && passive == null) {
+            warnNotOurs(e);
+            return Outcome.IGNORED;
+        }
+        if (aggressor == null || passive == null) {
+            warnNotOurs(e); // half ours: settle our side only
+        }
+
+        // Check everything for both sides first...
+        if (aggressor != null) {
+            checkTradeSide(e, aggressor, e.side());
+            checkFill(aggressorRef, price, e.qty());
+        }
+        if (passive != null) {
+            checkTradeSide(e, passive, e.side() == Side.BUY ? Side.SELL : Side.BUY);
+            checkFill(passiveRef, price, e.qty());
+        }
+
+        if (aggressor != null) {
+            onFill(aggressorRef, price, e.qty());
+        }
+        if (passive != null) {
+            onFill(passiveRef, price, e.qty());
+        }
+        return Outcome.APPLIED;
+    }
+
+    private void checkTradeSide(EngineEvent e, Order order, Side expectedSide) {
+        if (order.getSide() != expectedSide) {
+            throw new IllegalStateException("order " + order.getKey() + " is a " + order.getSide()
+                    + " but the TRADE has it as a " + expectedSide + ": " + e);
+        }
+        long expectedAccount = expectedSide == Side.BUY ? e.ownerId() : e.otherOwnerId();
+        if (order.getKey().accountId() != expectedAccount) {
+            throw new IllegalStateException("order " + order.getKey() + " belongs to account "
+                    + order.getKey().accountId() + " but the TRADE names account " + expectedAccount + ": " + e);
+        }
+    }
+
+    private Outcome applyRemainderEnded(EngineEvent e, DoneReason reason) {
+        EngineRef ref = new EngineRef(e.symbol(), e.orderId());
+        if (!byEngineRef.containsKey(ref)) {
+            warnNotOurs(e);
+            return Outcome.IGNORED;
+        }
+        onRemainderEnded(ref, e.qty(), reason);
+        return Outcome.APPLIED;
+    }
+
+    private Outcome applyRejected(EngineEvent e) {
+        OrderKey key = new OrderKey(e.ownerId(), e.clientOrderId());
+        if (!orders.containsKey(key)) {
+            warnNotOurs(e);
+            return Outcome.IGNORED;
+        }
+        onEngineRejected(key, e.orderId());
+        return Outcome.APPLIED;
+    }
+
+    private static void warnNotOurs(EngineEvent e) {
+        log.warn("engine event for an order not in the ledger (engine console or before a restart): {}", e);
     }
 }
