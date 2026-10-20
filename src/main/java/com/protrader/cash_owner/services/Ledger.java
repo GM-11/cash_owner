@@ -169,6 +169,17 @@ public final class Ledger {
         return Optional.ofNullable(accounts.get(accountId)).map(AccountView::of);
     }
 
+    /** Orders of this account that still hold a lock (SENT, IN_DOUBT, OPEN), oldest first. Copies only. */
+    public List<OrderView> openOrders(long accountId) {
+        List<OrderView> result = new ArrayList<>();
+        for (Order order : orders.values()) {
+            if (order.getKey().accountId() == accountId && order.getStage() != OrderStage.DONE) {
+                result.add(OrderView.of(order));
+            }
+        }
+        return result;
+    }
+
     public Optional<OrderView> order(OrderKey key) {
         return Optional.ofNullable(orders.get(key)).map(OrderView::of);
     }
