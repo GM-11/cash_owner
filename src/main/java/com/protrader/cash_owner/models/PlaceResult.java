@@ -1,5 +1,7 @@
 package com.protrader.cash_owner.models;
 
+import com.protrader.cash_owner.models.views.OrderView;
+
 public sealed interface PlaceResult {
     record Locked(OrderView order) implements PlaceResult {
     }
