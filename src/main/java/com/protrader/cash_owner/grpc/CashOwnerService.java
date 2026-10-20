@@ -1,6 +1,9 @@
 package com.protrader.cash_owner.grpc;
 
 import com.protrader.cash_owner.orders.PlaceOrderFlow;
+import com.protrader.cash_owner.owner.LedgerOwner;
+import com.protrader.cash_owner.owner.OwnerBusyException;
+import com.protrader.cash_owner.owner.OwnerUnavailableException;
 import com.protrader.proto.exchange.v1.AccountSnapshot;
 import com.protrader.proto.exchange.v1.AccountUpdate;
 import com.protrader.proto.exchange.v1.AccountUpdatesRequest;
@@ -23,7 +26,10 @@ import com.protrader.proto.exchange.v1.TransferRequest;
 import io.grpc.Status;
 import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.stub.StreamObserver;
+import java.util.concurrent.CompletionException;
 import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.grpc.server.service.GrpcService;
 
 @GrpcService
@@ -31,12 +37,16 @@ public class CashOwnerService extends CashOwnerGrpc.CashOwnerImplBase {
 
     private static final Pattern CLIENT_ORDER_ID = Pattern.compile("^[A-Za-z0-9_-]{1,48}$");
 
+    private static final Logger log = LoggerFactory.getLogger(CashOwnerService.class);
+
     private final AccountUpdateBus updates;
     private final PlaceOrderFlow placeOrderFlow;
+    private final LedgerOwner owner;
 
-    public CashOwnerService(AccountUpdateBus updates, PlaceOrderFlow placeOrderFlow) {
+    public CashOwnerService(AccountUpdateBus updates, PlaceOrderFlow placeOrderFlow, LedgerOwner owner) {
         this.updates = updates;
         this.placeOrderFlow = placeOrderFlow;
+        this.owner = owner;
     }
 
     @Override
@@ -97,7 +107,33 @@ public class CashOwnerService extends CashOwnerGrpc.CashOwnerImplBase {
 
     @Override
     public void getAccount(GetAccountRequest request, StreamObserver<AccountSnapshot> out) {
-        notBuilt(out, "GetAccount");
+        if (request.getAccountId() == 0) {
+            out.onError(Status.INVALID_ARGUMENT.withDescription("account_id is required").asRuntimeException());
+            return;
+        }
+        long accountId = request.getAccountId();
+
+        owner.request(l -> ProtoMapper.toSnapshot(accountId, l.account(accountId), l.openOrders(accountId)))
+                .whenComplete((snapshot, error) -> {
+                    if (error == null) {
+                        out.onNext(snapshot);
+                        out.onCompleted();
+                        return;
+                    }
+                    Throwable cause = error instanceof CompletionException && error.getCause() != null
+                            ? error.getCause()
+                            : error;
+                    if (cause instanceof OwnerBusyException) {
+                        out.onError(Status.RESOURCE_EXHAUSTED.withDescription("cash owner is busy, retry")
+                                .asRuntimeException());
+                    } else if (cause instanceof OwnerUnavailableException) {
+                        out.onError(Status.UNAVAILABLE.withDescription("cash owner is unavailable")
+                                .asRuntimeException());
+                    } else {
+                        log.error("GetAccount failed for account {}", accountId, cause);
+                        out.onError(Status.INTERNAL.withDescription("GetAccount failed").asRuntimeException());
+                    }
+                });
     }
 
     @Override
