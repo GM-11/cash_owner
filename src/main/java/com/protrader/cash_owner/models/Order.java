@@ -16,6 +16,7 @@ public final class Order {
     long filledNotionalMinor;
     long orderId;
     OrderStage stage;
+    DoneReason doneReason;
 
     public Order(OrderKey key, int symbol, Side side, long limitPriceMinor, long originalQty) {
         this.key = key;
@@ -28,6 +29,7 @@ public final class Order {
         this.filledNotionalMinor = 0;
         this.orderId = 0;
         this.stage = OrderStage.SENT;
+        this.doneReason = null;
     }
 
 }
