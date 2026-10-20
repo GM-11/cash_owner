@@ -106,7 +106,7 @@ public class PlaceOrderFlow {
                         .setOrder(ProtoMapper.toOrderState(duplicate.existing())).build();
                 return List.of(new Outgoing.Answer(caller, ack));
             }
-            case PlaceResult.Locked locked -> {
+            case PlaceResult.Locked _ -> {
                 SubmitRequest request;
                 boolean sent;
                 try {
