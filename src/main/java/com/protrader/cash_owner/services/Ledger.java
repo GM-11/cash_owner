@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,6 +32,7 @@ public final class Ledger {
     private final Map<Long, Account> accounts = new HashMap<>();
     private final Map<OrderKey, Order> orders = new LinkedHashMap<>();
     private final Map<EngineRef, OrderKey> byEngineRef = new HashMap<>();
+    private final Map<Integer, Long> lastApplied = new HashMap<>();
 
     public void openAccount(long accountId, long cashMinor, Map<Integer, Long> shares) {
         if (accounts.containsKey(accountId)) {
@@ -400,7 +402,22 @@ public final class Ledger {
     }
 
     public Outcome applyEngineEvent(EngineEvent e) {
-        return switch (e.kind()) {
+
+        if (e.seq() <= 0) {
+            throw new IllegalStateException("engine event seq must be positive: " + e);
+        }
+        Long last = lastApplied.get(e.symbol());
+        if (last != null) {
+            if (e.seq() <= last) {
+                return Outcome.DUPLICATE; // seen it already (the bridge resends after a restart): change nothing
+            }
+            if (e.seq() != last + 1) {
+                throw new IllegalStateException("gap in engine events for symbol " + e.symbol() + ": last applied "
+                        + last + ", got " + e.seq() + " (" + (e.seq() - last - 1) + " missing)");
+            }
+        }
+
+        Outcome outcome = switch (e.kind()) {
             case ACCEPTED -> applyAccepted(e);
             case TRADE -> applyTrade(e);
             case CANCELLED -> applyRemainderEnded(e, DoneReason.CANCELED);
@@ -408,6 +425,14 @@ public final class Ledger {
             case REJECTED -> applyRejected(e);
             case RESTED, HALTED, OTHER -> Outcome.IGNORED; // no money or shares move
         };
+
+        lastApplied.put(e.symbol(), e.seq());
+        return outcome;
+    }
+
+    public OptionalLong lastApplied(int symbol) {
+        Long last = lastApplied.get(symbol);
+        return last == null ? OptionalLong.empty() : OptionalLong.of(last);
     }
 
     private Outcome applyAccepted(EngineEvent e) {
