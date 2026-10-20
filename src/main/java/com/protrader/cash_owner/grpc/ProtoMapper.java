@@ -54,11 +54,8 @@ public final class ProtoMapper {
         };
     }
 
-    /**
-     * GetAccount reply. account_seq is 0 until step 5 piece 6 (AccountUpdate) adds it; average price and
-     * realized P&L are 0 until step 6.
-     */
-    public static AccountSnapshot toSnapshot(long accountId, Optional<AccountView> account, List<OrderView> openOrders) {
+    public static AccountSnapshot toSnapshot(long accountId, Optional<AccountView> account,
+            List<OrderView> openOrders) {
         if (account.isEmpty()) {
             return AccountSnapshot.newBuilder().setFound(false).setAccountId(accountId).build();
         }
