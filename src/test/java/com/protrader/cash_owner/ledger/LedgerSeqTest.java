@@ -68,9 +68,9 @@ class LedgerSeqTest {
         ledger.applyEngineEvent(accepted(MOOG, 1, 3, 21, "b", Side.BUY, 10_000, 10));
 
         // When the same TRADE of 4 (seq 2) arrives twice
-        assertEquals(Outcome.APPLIED, ledger.applyEngineEvent(tradeAgainstConsole(MOOG, 2, 3, 10_000L, 4)));
+        assertEquals(Outcome.APPLIED, ledger.applyEngineEvent(tradeAgainstConsole(MOOG, 2, 3, 10_000L, 4)).outcome());
         AccountView afterFirst = account();
-        assertEquals(Outcome.DUPLICATE, ledger.applyEngineEvent(tradeAgainstConsole(MOOG, 2, 3, 10_000L, 4)));
+        assertEquals(Outcome.DUPLICATE, ledger.applyEngineEvent(tradeAgainstConsole(MOOG, 2, 3, 10_000L, 4)).outcome());
 
         // Then 4 filled, not 8; balances exactly as after the first one
         assertEquals(4, filled("b"));
@@ -89,9 +89,9 @@ class LedgerSeqTest {
         ledger.applyEngineEvent(rested(MOOG, 8, 3));
         assertEquals(8, ledger.lastApplied(MOOG).orElseThrow());
 
-        assertEquals(Outcome.DUPLICATE, ledger.applyEngineEvent(tradeAgainstConsole(MOOG, 7, 3, 10_000L, 2)));
-        assertEquals(Outcome.DUPLICATE, ledger.applyEngineEvent(rested(MOOG, 8, 3)));
-        assertEquals(Outcome.APPLIED, ledger.applyEngineEvent(tradeAgainstConsole(MOOG, 9, 3, 10_000L, 3)));
+        assertEquals(Outcome.DUPLICATE, ledger.applyEngineEvent(tradeAgainstConsole(MOOG, 7, 3, 10_000L, 2)).outcome());
+        assertEquals(Outcome.DUPLICATE, ledger.applyEngineEvent(rested(MOOG, 8, 3)).outcome());
+        assertEquals(Outcome.APPLIED, ledger.applyEngineEvent(tradeAgainstConsole(MOOG, 9, 3, 10_000L, 3)).outcome());
 
         assertEquals(5, filled("b")); // 2 + 3, the resent 2 not counted again
         assertEquals(9, ledger.lastApplied(MOOG).orElseThrow());
@@ -128,7 +128,7 @@ class LedgerSeqTest {
         assertEquals(1, ledger.lastApplied(MOOG).orElseThrow());
 
         // seq 2 again, correct this time → applied, not mistaken for a duplicate
-        assertEquals(Outcome.APPLIED, ledger.applyEngineEvent(tradeAgainstConsole(MOOG, 2, 3, 10_000L, 4)));
+        assertEquals(Outcome.APPLIED, ledger.applyEngineEvent(tradeAgainstConsole(MOOG, 2, 3, 10_000L, 4)).outcome());
         assertEquals(4, filled("b"));
         assertEquals(2, ledger.lastApplied(MOOG).orElseThrow());
         ledger.checkInvariants();
@@ -141,10 +141,10 @@ class LedgerSeqTest {
         placeBuy(BNNA, "n", 10);
 
         // MOOG 1, 2 and BNNA 1, 2 interleaved: none is a duplicate or a gap
-        assertEquals(Outcome.APPLIED, ledger.applyEngineEvent(accepted(MOOG, 1, 3, 21, "m", Side.BUY, 10_000, 10)));
-        assertEquals(Outcome.APPLIED, ledger.applyEngineEvent(accepted(BNNA, 1, 3, 21, "n", Side.BUY, 10_000, 10)));
-        assertEquals(Outcome.APPLIED, ledger.applyEngineEvent(tradeAgainstConsole(MOOG, 2, 3, 10_000L, 1)));
-        assertEquals(Outcome.APPLIED, ledger.applyEngineEvent(tradeAgainstConsole(BNNA, 2, 3, 10_000L, 2)));
+        assertEquals(Outcome.APPLIED, ledger.applyEngineEvent(accepted(MOOG, 1, 3, 21, "m", Side.BUY, 10_000, 10)).outcome());
+        assertEquals(Outcome.APPLIED, ledger.applyEngineEvent(accepted(BNNA, 1, 3, 21, "n", Side.BUY, 10_000, 10)).outcome());
+        assertEquals(Outcome.APPLIED, ledger.applyEngineEvent(tradeAgainstConsole(MOOG, 2, 3, 10_000L, 1)).outcome());
+        assertEquals(Outcome.APPLIED, ledger.applyEngineEvent(tradeAgainstConsole(BNNA, 2, 3, 10_000L, 2)).outcome());
 
         assertEquals(1, filled("m"));
         assertEquals(2, filled("n"));
@@ -162,10 +162,10 @@ class LedgerSeqTest {
                 new EngineEvent(MOOG, 3, EngineEventKind.HALTED, 0, 51, 0, 99, 0, Side.BUY, 10_000L, 10, ""),
                 new EngineEvent(MOOG, 4, EngineEventKind.OTHER, 0, 51, 0, 99, 0, Side.BUY, 10_000L, 10, ""));
         for (EngineEvent e : events) {
-            assertEquals(Outcome.IGNORED, ledger.applyEngineEvent(e));
+            assertEquals(Outcome.IGNORED, ledger.applyEngineEvent(e).outcome());
         }
         assertEquals(4, ledger.lastApplied(MOOG).orElseThrow());
-        assertEquals(Outcome.IGNORED, ledger.applyEngineEvent(rested(MOOG, 5, 50))); // not a gap
+        assertEquals(Outcome.IGNORED, ledger.applyEngineEvent(rested(MOOG, 5, 50)).outcome()); // not a gap
     }
 
     @Test
@@ -173,7 +173,7 @@ class LedgerSeqTest {
         assertTrue(ledger.lastApplied(MOOG).isEmpty());
         ledger.applyEngineEvent(rested(MOOG, 812, 50));
         assertEquals(812, ledger.lastApplied(MOOG).orElseThrow());
-        assertEquals(Outcome.DUPLICATE, ledger.applyEngineEvent(rested(MOOG, 811, 50)));
+        assertEquals(Outcome.DUPLICATE, ledger.applyEngineEvent(rested(MOOG, 811, 50)).outcome());
     }
 
     @Test

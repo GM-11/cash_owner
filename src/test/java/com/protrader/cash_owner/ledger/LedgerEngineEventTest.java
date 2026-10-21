@@ -8,6 +8,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import com.protrader.cash_owner.models.AccountChangeKind;
+import com.protrader.cash_owner.models.ApplyResult;
 import com.protrader.cash_owner.models.DoneReason;
 import com.protrader.cash_owner.models.EngineEvent;
 import com.protrader.cash_owner.models.EngineEventKind;
@@ -23,7 +25,10 @@ import com.protrader.cash_owner.services.Ledger;
 
 import org.junit.jupiter.api.Test;
 
-/** Step 5, piece 3: Ledger.applyEngineEvent routes each engine event to our order(s). Money is in paise. */
+/**
+ * Step 5, piece 3: Ledger.applyEngineEvent routes each engine event to our
+ * order(s). Money is in paise.
+ */
 class LedgerEngineEventTest {
 
     private static final int MOOG = 1;
@@ -32,7 +37,8 @@ class LedgerEngineEventTest {
     private final Ledger ledger = new Ledger();
     private long seq = 0;
 
-    // ------------------------------------------------------------------ event builders
+    // ------------------------------------------------------------------ event
+    // builders
 
     private EngineEvent accepted(long orderId, long owner, String clientOrderId, Side side, long price, long qty) {
         return new EngineEvent(MOOG, ++seq, EngineEventKind.ACCEPTED, 0, orderId, 0, owner, 0, side, price, qty,
@@ -74,7 +80,7 @@ class LedgerEngineEventTest {
             long orderId) {
         place(accountId, clientOrderId, side, limitMinor, qty);
         assertEquals(Outcome.APPLIED,
-                ledger.applyEngineEvent(accepted(orderId, accountId, clientOrderId, side, limitMinor, qty)));
+                ledger.applyEngineEvent(accepted(orderId, accountId, clientOrderId, side, limitMinor, qty)).outcome());
     }
 
     private AccountView account(long id) {
@@ -111,7 +117,7 @@ class LedgerEngineEventTest {
         place(21, "b", Side.BUY, 10_000, 10);
 
         // When the engine's ACCEPTED arrives first
-        Outcome outcome = ledger.applyEngineEvent(accepted(7, 21, "b", Side.BUY, 10_000, 10));
+        Outcome outcome = ledger.applyEngineEvent(accepted(7, 21, "b", Side.BUY, 10_000, 10)).outcome();
 
         // Then it is OPEN and findable by engine id 7
         assertEquals(Outcome.APPLIED, outcome);
@@ -135,15 +141,23 @@ class LedgerEngineEventTest {
     }
 
     @Test
-    void acceptedAfterTheAckChangesNothing() {
+    void acceptedAfterTheAckChangesTheOrderNotAtAllAndOnlyAnnouncesItAsNew() {
         ledger.openAccount(21, RS_1_LAKH, Map.of());
         OrderKey key = place(21, "b", Side.BUY, 10_000, 10);
         ledger.onAccepted(key, 7);
-        Object before = snapshot(key);
+        OrderView orderBefore = order(21, "b");
+        AccountView accountBefore = account(21);
 
-        assertEquals(Outcome.APPLIED, ledger.applyEngineEvent(accepted(7, 21, "b", Side.BUY, 10_000, 10)));
+        ApplyResult result = ledger.applyEngineEvent(accepted(7, 21, "b", Side.BUY, 10_000, 10));
 
-        assertEquals(before, snapshot(key));
+        assertEquals(Outcome.APPLIED, result.outcome());
+        assertEquals(1, result.changes().size());
+        assertEquals(AccountChangeKind.NEW, result.changes().get(0).kind());
+        assertEquals(orderBefore, order(21, "b"));
+        // the money is untouched; only the account's change counter moved
+        assertEquals(accountBefore.freeCashMinor(), account(21).freeCashMinor());
+        assertEquals(accountBefore.lockedCashMinor(), account(21).lockedCashMinor());
+        assertEquals(accountBefore.accountSeq() + 1, account(21).accountSeq());
         ledger.checkInvariants();
     }
 
@@ -162,16 +176,19 @@ class LedgerEngineEventTest {
         ledger.openAccount(21, RS_1_LAKH, Map.of());
         Object before = snapshot();
 
-        assertEquals(Outcome.IGNORED, ledger.applyEngineEvent(accepted(7, 99, "console", Side.BUY, 10_000, 10)));
+        assertEquals(Outcome.IGNORED,
+                ledger.applyEngineEvent(accepted(7, 99, "console", Side.BUY, 10_000, 10)).outcome());
 
         assertEquals(before, snapshot());
     }
 
-    // ------------------------------------------------------------------ the live run, through events only
+    // ------------------------------------------------------------------ the live
+    // run, through events only
 
     @Test
     void verifiedLiveRunSettlesFromEventsAloneEvenWithNoSubmitAcks() {
-        // 2026-10-19 run. No onAccepted calls at all: every order is linked by the engine's ACCEPTED event.
+        // 2026-10-19 run. No onAccepted calls at all: every order is linked by the
+        // engine's ACCEPTED event.
         ledger.openAccount(21, RS_1_LAKH, Map.of(MOOG, 500L));
         ledger.openAccount(1, RS_1_LAKH, Map.of(MOOG, 500L));
         place(21, "b1", Side.BUY, 10_000, 10);
@@ -185,7 +202,7 @@ class LedgerEngineEventTest {
                 accepted(5, 21, "b3", Side.BUY, 10_100, 5), rested(5, 21, Side.BUY, 10_100, 5),
                 accepted(7, 1, "f1", Side.SELL, 10_050, 18),
                 trade(7, 3, 21, 1, Side.SELL, 10_100L, 10), // f1 × b2
-                trade(7, 5, 21, 1, Side.SELL, 10_100L, 5), //  f1 × b3
+                trade(7, 5, 21, 1, Side.SELL, 10_100L, 5), // f1 × b3
                 rested(7, 1, Side.SELL, 10_050, 3));
         for (EngineEvent e : events) {
             ledger.applyEngineEvent(e);
@@ -212,11 +229,12 @@ class LedgerEngineEventTest {
 
     @Test
     void tradeWithOneUnknownSideSettlesOnlyOurs() {
-        // Given our buy rests as engine order 3; the seller is an engine-console order (id 50)
+        // Given our buy rests as engine order 3; the seller is an engine-console order
+        // (id 50)
         ledger.openAccount(21, RS_1_LAKH, Map.of());
         placeAndAccept(21, "b", Side.BUY, 10_000, 10, 3);
 
-        Outcome outcome = ledger.applyEngineEvent(trade(50, 3, 21, 99, Side.SELL, 9_900L, 10));
+        Outcome outcome = ledger.applyEngineEvent(trade(50, 3, 21, 99, Side.SELL, 9_900L, 10)).outcome();
 
         assertEquals(Outcome.APPLIED, outcome);
         assertEquals(RS_1_LAKH - 99_000, account(21).freeCashMinor());
@@ -230,7 +248,7 @@ class LedgerEngineEventTest {
         ledger.openAccount(21, RS_1_LAKH, Map.of());
         Object before = snapshot();
 
-        assertEquals(Outcome.IGNORED, ledger.applyEngineEvent(trade(50, 51, 98, 99, Side.BUY, 10_000L, 5)));
+        assertEquals(Outcome.IGNORED, ledger.applyEngineEvent(trade(50, 51, 98, 99, Side.BUY, 10_000L, 5)).outcome());
 
         assertEquals(before, snapshot());
     }
@@ -270,7 +288,8 @@ class LedgerEngineEventTest {
 
     @Test
     void tradeWhoseSecondSideIsInvalidSettlesNeitherSide() {
-        // The reason for checkFill: aggressor fine, passive has only 4 left → the whole trade is refused
+        // The reason for checkFill: aggressor fine, passive has only 4 left → the whole
+        // trade is refused
         ledger.openAccount(21, RS_1_LAKH, Map.of());
         ledger.openAccount(1, RS_1_LAKH, Map.of(MOOG, 100L));
         placeAndAccept(21, "b", Side.BUY, 10_000, 4, 3); // resting buy of 4
@@ -280,7 +299,8 @@ class LedgerEngineEventTest {
                 new OrderKey(21, "b"), new OrderKey(1, "s"));
     }
 
-    // ------------------------------------------------------------------ CANCELLED / EXPIRED / REJECTED
+    // ------------------------------------------------------------------ CANCELLED
+    // / EXPIRED / REJECTED
 
     @Test
     void expiredEventUnlocksTheRest() {
@@ -289,7 +309,7 @@ class LedgerEngineEventTest {
         ledger.applyEngineEvent(trade(50, 3, 21, 99, Side.SELL, 10_000L, 4));
 
         assertEquals(Outcome.APPLIED,
-                ledger.applyEngineEvent(ended(EngineEventKind.EXPIRED, 3, 21, Side.BUY, 6, "b")));
+                ledger.applyEngineEvent(ended(EngineEventKind.EXPIRED, 3, 21, Side.BUY, 6, "b")).outcome());
 
         assertEquals(0, account(21).lockedCashMinor());
         assertEquals(DoneReason.EXPIRED, order(21, "b").doneReason());
@@ -302,7 +322,7 @@ class LedgerEngineEventTest {
         placeAndAccept(1, "s", Side.SELL, 10_000, 10, 4);
 
         assertEquals(Outcome.APPLIED,
-                ledger.applyEngineEvent(ended(EngineEventKind.CANCELLED, 4, 1, Side.SELL, 10, "")));
+                ledger.applyEngineEvent(ended(EngineEventKind.CANCELLED, 4, 1, Side.SELL, 10, "")).outcome());
 
         assertEquals(100, account(1).holdings().get(MOOG).freeQty());
         assertEquals(DoneReason.CANCELED, order(1, "s").doneReason());
@@ -312,9 +332,9 @@ class LedgerEngineEventTest {
     @Test
     void endedEventForAnUnknownOrderIsIgnored() {
         assertEquals(Outcome.IGNORED,
-                ledger.applyEngineEvent(ended(EngineEventKind.EXPIRED, 50, 99, Side.BUY, 6, "x")));
+                ledger.applyEngineEvent(ended(EngineEventKind.EXPIRED, 50, 99, Side.BUY, 6, "x")).outcome());
         assertEquals(Outcome.IGNORED,
-                ledger.applyEngineEvent(ended(EngineEventKind.CANCELLED, 50, 99, Side.BUY, 6, "")));
+                ledger.applyEngineEvent(ended(EngineEventKind.CANCELLED, 50, 99, Side.BUY, 6, "")).outcome());
     }
 
     @Test
@@ -322,7 +342,7 @@ class LedgerEngineEventTest {
         ledger.openAccount(21, RS_1_LAKH, Map.of());
         place(21, "abc", Side.BUY, 10_000, 10); // SENT
 
-        assertEquals(Outcome.APPLIED, ledger.applyEngineEvent(rejected(9, 21, "abc", Side.BUY, 10)));
+        assertEquals(Outcome.APPLIED, ledger.applyEngineEvent(rejected(9, 21, "abc", Side.BUY, 10)).outcome());
 
         assertEquals(RS_1_LAKH, account(21).freeCashMinor());
         assertEquals(DoneReason.REJECTED, order(21, "abc").doneReason());
@@ -332,10 +352,11 @@ class LedgerEngineEventTest {
 
     @Test
     void rejectedEventForAnUnknownOrderIsIgnored() {
-        assertEquals(Outcome.IGNORED, ledger.applyEngineEvent(rejected(9, 99, "nope", Side.BUY, 10)));
+        assertEquals(Outcome.IGNORED, ledger.applyEngineEvent(rejected(9, 99, "nope", Side.BUY, 10)).outcome());
     }
 
-    // ------------------------------------------------------------------ nothing to do
+    // ------------------------------------------------------------------ nothing to
+    // do
 
     @Test
     void restedHaltedAndOtherChangeNothing() {
@@ -344,9 +365,11 @@ class LedgerEngineEventTest {
         OrderKey key = new OrderKey(21, "b");
         Object before = snapshot(key);
 
-        assertEquals(Outcome.IGNORED, ledger.applyEngineEvent(rested(3, 21, Side.BUY, 10_000, 10)));
-        assertEquals(Outcome.IGNORED, ledger.applyEngineEvent(ended(EngineEventKind.HALTED, 3, 21, Side.BUY, 10, "")));
-        assertEquals(Outcome.IGNORED, ledger.applyEngineEvent(ended(EngineEventKind.OTHER, 3, 21, Side.BUY, 10, "")));
+        assertEquals(Outcome.IGNORED, ledger.applyEngineEvent(rested(3, 21, Side.BUY, 10_000, 10)).outcome());
+        assertEquals(Outcome.IGNORED,
+                ledger.applyEngineEvent(ended(EngineEventKind.HALTED, 3, 21, Side.BUY, 10, "")).outcome());
+        assertEquals(Outcome.IGNORED,
+                ledger.applyEngineEvent(ended(EngineEventKind.OTHER, 3, 21, Side.BUY, 10, "")).outcome());
 
         assertEquals(before, snapshot(key));
         ledger.checkInvariants();

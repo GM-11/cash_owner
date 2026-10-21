@@ -6,13 +6,17 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
 
+import com.protrader.cash_owner.models.AccountChange;
 import com.protrader.cash_owner.models.OrderKey;
 import com.protrader.cash_owner.models.Side;
 import com.protrader.cash_owner.models.views.AccountView;
 import com.protrader.cash_owner.owner.LedgerOwner;
+import com.protrader.cash_owner.services.AccountUpdatePublisher;
 import com.protrader.cash_owner.services.Ledger;
 import com.protrader.proto.exchange.v1.EventKind;
 import com.protrader.proto.exchange.v1.MarketEvent;
@@ -26,7 +30,24 @@ class SettlementHandlerTest {
 
     private static final int MOOG = 1;
 
+    /** Remembers every submit and the thread it came from; sends nothing. */
+    private static final class RecordingPublisher extends AccountUpdatePublisher {
+        final List<List<AccountChange>> submitted = new CopyOnWriteArrayList<>();
+        final List<String> threads = new CopyOnWriteArrayList<>();
+
+        RecordingPublisher() {
+            super(update -> { });
+        }
+
+        @Override
+        public void submit(List<AccountChange> changes) {
+            threads.add(Thread.currentThread().getName());
+            submitted.add(changes);
+        }
+    }
+
     private LedgerOwner owner;
+    private RecordingPublisher publisher;
     private SettlementHandler handler;
 
     @BeforeEach
@@ -34,7 +55,8 @@ class SettlementHandlerTest {
         owner = LedgerOwner.forTests(new LedgerOwner.Settings(10_000, true, Duration.ofSeconds(5)),
                 Ledger::checkInvariants);
         owner.start();
-        handler = new SettlementHandler(owner, Optional.empty());
+        publisher = new RecordingPublisher();
+        handler = new SettlementHandler(owner, publisher, Optional.empty());
         // account 21 buys 10 MOOG @ ₹100 (₹1,000 locked), account 1 sells 10 @ ₹100 (10 shares locked)
         owner.followUp(l -> {
             l.openAccount(21, 10_000_000, Map.of());
@@ -118,6 +140,35 @@ class SettlementHandlerTest {
 
         assertThrows(SettlementHandler.SettlementStoppedException.class, () -> handler.onEngineEvent(noKind));
         assertTrue(handler.isStopped());
+    }
+
+    /** Red until the Ledger builds changes: an APPLIED event's changes reach the publisher from the owner job. */
+    @Test
+    void appliedChangesAreSubmittedFromInsideTheOwnerJob() throws Exception {
+        handler.onEngineEvent(accepted(1, 3, 21, "b", com.protrader.proto.exchange.v1.Side.SIDE_BUY));
+
+        // onEngineEvent has returned, so the submit happened before the job's future completed
+        assertEquals(1, publisher.submitted.size());
+        assertEquals(1, publisher.submitted.get(0).size());
+        assertEquals(21, publisher.submitted.get(0).get(0).accountId());
+        assertEquals(List.of("ledger-owner"), publisher.threads);
+    }
+
+    @Test
+    void duplicateAndIgnoredResultsSubmitNothing() throws Exception {
+        handler.onEngineEvent(accepted(1, 3, 21, "b", com.protrader.proto.exchange.v1.Side.SIDE_BUY));
+        handler.onEngineEvent(accepted(2, 4, 1, "s", com.protrader.proto.exchange.v1.Side.SIDE_SELL));
+        handler.onEngineEvent(trade(3, 4));
+        int submits = publisher.submitted.size();
+
+        handler.onEngineEvent(trade(3, 4)); // DUPLICATE: the bridge resent it
+        MarketEvent rested = MarketEvent.newBuilder().setSymbol(MOOG).setSeq(4).setKind(EventKind.EVENT_KIND_RESTED)
+                .setOrderId(3).setOwnerId(21).build();
+        handler.onEngineEvent(rested); // IGNORED: no money moves
+
+        assertEquals(1, handler.duplicateCount());
+        assertEquals(1, handler.ignoredCount());
+        assertEquals(submits, publisher.submitted.size());
     }
 
     @Test
