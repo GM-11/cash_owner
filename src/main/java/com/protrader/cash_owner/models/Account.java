@@ -3,6 +3,7 @@ package com.protrader.cash_owner.models;
 import java.util.HashMap;
 import java.util.Map;
 
+import lombok.AccessLevel;
 import lombok.Getter;
 
 import lombok.Setter;
@@ -13,12 +14,18 @@ public final class Account {
     final long accountId;
     long freeCashMinor;
     long lockedCashMinor;
+    @Setter(AccessLevel.NONE)
+    long accountSeq;
     final Map<Integer, Holding> holdings = new HashMap<>();
 
     public Account(long accountId, long freeCashMinor, long lockedCashMinor) {
         this.accountId = accountId;
         this.freeCashMinor = freeCashMinor;
         this.lockedCashMinor = lockedCashMinor;
+    }
+
+    public long nextAccountSeq() {
+        return ++accountSeq;
     }
 
     public Holding getHoldingFromSymbol(int symbol) {
