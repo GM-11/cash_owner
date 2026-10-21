@@ -12,6 +12,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.protrader.cash_owner.models.Account;
+import com.protrader.cash_owner.models.AccountChange;
+import com.protrader.cash_owner.models.AccountChangeKind;
+import com.protrader.cash_owner.models.ApplyResult;
 import com.protrader.cash_owner.models.DoneReason;
 import com.protrader.cash_owner.models.EngineEvent;
 import com.protrader.cash_owner.models.EngineRef;
@@ -19,11 +22,12 @@ import com.protrader.cash_owner.models.Holding;
 import com.protrader.cash_owner.models.Order;
 import com.protrader.cash_owner.models.OrderKey;
 import com.protrader.cash_owner.models.OrderStage;
-import com.protrader.cash_owner.models.Outcome;
 import com.protrader.cash_owner.models.PlaceResult;
 import com.protrader.cash_owner.models.RejectReason;
 import com.protrader.cash_owner.models.Side;
 import com.protrader.cash_owner.models.views.AccountView;
+import com.protrader.cash_owner.models.views.BalancesView;
+import com.protrader.cash_owner.models.views.HoldingView;
 import com.protrader.cash_owner.models.views.OrderView;
 
 public final class Ledger {
@@ -169,7 +173,10 @@ public final class Ledger {
         return Optional.ofNullable(accounts.get(accountId)).map(AccountView::of);
     }
 
-    /** Orders of this account that still hold a lock (SENT, IN_DOUBT, OPEN), oldest first. Copies only. */
+    /**
+     * Orders of this account that still hold a lock (SENT, IN_DOUBT, OPEN), oldest
+     * first. Copies only.
+     */
     public List<OrderView> openOrders(long accountId) {
         List<OrderView> result = new ArrayList<>();
         for (Order order : orders.values()) {
@@ -412,7 +419,7 @@ public final class Ledger {
         }
     }
 
-    public Outcome applyEngineEvent(EngineEvent e) {
+    public ApplyResult applyEngineEvent(EngineEvent e) {
 
         if (e.seq() <= 0) {
             throw new IllegalStateException("engine event seq must be positive: " + e);
@@ -420,7 +427,7 @@ public final class Ledger {
         Long last = lastApplied.get(e.symbol());
         if (last != null) {
             if (e.seq() <= last) {
-                return Outcome.DUPLICATE; // seen it already (the bridge resends after a restart): change nothing
+                return ApplyResult.duplicate(); // seen it already (the bridge resends after a restart): change nothing
             }
             if (e.seq() != last + 1) {
                 throw new IllegalStateException("gap in engine events for symbol " + e.symbol() + ": last applied "
@@ -428,17 +435,17 @@ public final class Ledger {
             }
         }
 
-        Outcome outcome = switch (e.kind()) {
+        ApplyResult result = switch (e.kind()) {
             case ACCEPTED -> applyAccepted(e);
             case TRADE -> applyTrade(e);
             case CANCELLED -> applyRemainderEnded(e, DoneReason.CANCELED);
             case EXPIRED -> applyRemainderEnded(e, DoneReason.EXPIRED);
             case REJECTED -> applyRejected(e);
-            case RESTED, HALTED, OTHER -> Outcome.IGNORED; // no money or shares move
+            case RESTED, HALTED, OTHER -> ApplyResult.ignored(); // no money or shares move
         };
 
         lastApplied.put(e.symbol(), e.seq());
-        return outcome;
+        return result;
     }
 
     public OptionalLong lastApplied(int symbol) {
@@ -446,12 +453,12 @@ public final class Ledger {
         return last == null ? OptionalLong.empty() : OptionalLong.of(last);
     }
 
-    private Outcome applyAccepted(EngineEvent e) {
+    private ApplyResult applyAccepted(EngineEvent e) {
         OrderKey key = new OrderKey(e.ownerId(), e.clientOrderId());
         Order order = orders.get(key);
         if (order == null) {
             warnNotOurs(e);
-            return Outcome.IGNORED;
+            return ApplyResult.ignored();
         }
 
         if (order.getOrderId() != 0 && order.getOrderId() != e.orderId()) {
@@ -459,10 +466,10 @@ public final class Ledger {
                     + " but the ACCEPTED event names " + e.orderId());
         }
         onAccepted(key, e.orderId());
-        return Outcome.APPLIED;
+        return ApplyResult.applied(List.of(buildChange(e, order, AccountChangeKind.NEW, 0, 0)));
     }
 
-    private Outcome applyTrade(EngineEvent e) {
+    private ApplyResult applyTrade(EngineEvent e) {
         if (e.priceMinor() == null) {
             throw new IllegalStateException("TRADE without a price: " + e);
         }
@@ -474,7 +481,7 @@ public final class Ledger {
 
         if (aggressor == null && passive == null) {
             warnNotOurs(e);
-            return Outcome.IGNORED;
+            return ApplyResult.ignored();
         }
         if (aggressor == null || passive == null) {
             warnNotOurs(e); // half ours: settle our side only
@@ -496,7 +503,34 @@ public final class Ledger {
         if (passive != null) {
             onFill(passiveRef, price, e.qty());
         }
-        return Outcome.APPLIED;
+
+        List<AccountChange> changes = new ArrayList<>();
+        if (aggressor != null) {
+            changes.add(fillChange(e, aggressor, price));
+        }
+        if (passive != null) {
+            changes.add(fillChange(e, passive, price));
+        }
+        return ApplyResult.applied(changes);
+    }
+
+    private AccountChange fillChange(EngineEvent e, Order order, long price) {
+        AccountChangeKind kind = order.getStage() == OrderStage.DONE ? AccountChangeKind.FILL
+                : AccountChangeKind.PARTIAL_FILL;
+        return buildChange(e, order, kind, price, e.qty());
+    }
+
+    private AccountChange buildChange(EngineEvent e, Order order, AccountChangeKind kind, long fillPriceMinor,
+            long fillQty) {
+        Account account = accounts.get(order.getKey().accountId());
+        long seq = account.nextAccountSeq();
+        BalancesView balances = new BalancesView(account.getFreeCashMinor(), account.getLockedCashMinor());
+        boolean fill = kind == AccountChangeKind.PARTIAL_FILL || kind == AccountChangeKind.FILL;
+        boolean sellEnded = order.getSide() == Side.SELL && kind != AccountChangeKind.NEW;
+        Holding holding = fill || sellEnded ? account.getHoldings().get(order.getSymbol()) : null;
+        HoldingView position = holding == null ? null : HoldingView.of(holding);
+        return new AccountChange(account.getAccountId(), seq, kind, OrderView.of(order), fillPriceMinor, fillQty,
+                e.seq(), e.ts(), balances, position);
     }
 
     private void checkTradeSide(EngineEvent e, Order order, Side expectedSide) {
@@ -511,24 +545,27 @@ public final class Ledger {
         }
     }
 
-    private Outcome applyRemainderEnded(EngineEvent e, DoneReason reason) {
+    private ApplyResult applyRemainderEnded(EngineEvent e, DoneReason reason) {
         EngineRef ref = new EngineRef(e.symbol(), e.orderId());
         if (!byEngineRef.containsKey(ref)) {
             warnNotOurs(e);
-            return Outcome.IGNORED;
+            return ApplyResult.ignored();
         }
         onRemainderEnded(ref, e.qty(), reason);
-        return Outcome.APPLIED;
+        Order order = orders.get(byEngineRef.get(ref));
+        AccountChangeKind kind = reason == DoneReason.CANCELED ? AccountChangeKind.CANCELED
+                : AccountChangeKind.EXPIRED;
+        return ApplyResult.applied(List.of(buildChange(e, order, kind, 0, 0)));
     }
 
-    private Outcome applyRejected(EngineEvent e) {
+    private ApplyResult applyRejected(EngineEvent e) {
         OrderKey key = new OrderKey(e.ownerId(), e.clientOrderId());
         if (!orders.containsKey(key)) {
             warnNotOurs(e);
-            return Outcome.IGNORED;
+            return ApplyResult.ignored();
         }
         onEngineRejected(key, e.orderId());
-        return Outcome.APPLIED;
+        return ApplyResult.applied(List.of(buildChange(e, orders.get(key), AccountChangeKind.REJECTED, 0, 0)));
     }
 
     private static void warnNotOurs(EngineEvent e) {
