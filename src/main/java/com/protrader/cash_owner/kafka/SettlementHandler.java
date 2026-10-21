@@ -8,9 +8,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import com.protrader.cash_owner.models.ApplyResult;
 import com.protrader.cash_owner.models.EngineEvent;
 import com.protrader.cash_owner.models.Outcome;
 import com.protrader.cash_owner.owner.LedgerOwner;
+import com.protrader.cash_owner.services.AccountUpdatePublisher;
 import com.protrader.proto.exchange.v1.MarketEvent;
 
 import io.grpc.health.v1.HealthCheckResponse.ServingStatus;
@@ -22,6 +24,7 @@ public class SettlementHandler implements EngineEventHandler {
     private static final Logger log = LoggerFactory.getLogger(SettlementHandler.class);
 
     private final LedgerOwner owner;
+    private final AccountUpdatePublisher publisher;
     private final Optional<HealthStatusManager> health;
 
     private volatile boolean stopped;
@@ -29,8 +32,10 @@ public class SettlementHandler implements EngineEventHandler {
     private final AtomicLong duplicates = new AtomicLong();
     private final AtomicLong ignored = new AtomicLong();
 
-    public SettlementHandler(LedgerOwner owner, Optional<HealthStatusManager> health) {
+    public SettlementHandler(LedgerOwner owner, AccountUpdatePublisher publisher,
+            Optional<HealthStatusManager> health) {
         this.owner = owner;
+        this.publisher = publisher;
         this.health = health;
     }
 
@@ -49,7 +54,15 @@ public class SettlementHandler implements EngineEventHandler {
 
         Outcome outcome;
         try {
-            outcome = owner.followUp(ledger -> ledger.applyEngineEvent(event)).get(); // wait: see class comment
+            outcome = owner.followUp(ledger -> {
+                ApplyResult result = ledger.applyEngineEvent(event);
+                // Inside the owner job, never after .get(): two listener threads (different symbols) could
+                // otherwise queue one account's changes out of order.
+                if (!result.changes().isEmpty()) {
+                    publisher.submit(result.changes());
+                }
+                return result.outcome();
+            }).get(); // wait: see class comment
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt(); // shutting down
             throw stop("interrupted while settling " + event, e);
