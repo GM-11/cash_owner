@@ -39,7 +39,12 @@ public class AccountUpdateBus {
     }
 
     public void publish(AccountUpdate update) {
-        kafka.send(topic, Long.toString(update.getAccountId()), update.toByteArray());
+        kafka.send(topic, Long.toString(update.getAccountId()), update.toByteArray()).whenComplete((r, ex) -> {
+            if (ex != null) {
+                log.error("account-updates: kafka send failed for account {} seq {}: {}", update.getAccountId(),
+                        update.getAccountSeq(), ex.toString(), ex);
+            }
+        });
 
         for (var e : gateways.entrySet()) {
             ServerCallStreamObserver<AccountUpdate> stream = e.getKey();

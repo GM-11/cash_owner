@@ -4,12 +4,16 @@ import java.util.List;
 import java.util.Optional;
 import java.util.TreeMap;
 
+import com.protrader.cash_owner.models.AccountChange;
+import com.protrader.cash_owner.models.AccountChangeKind;
 import com.protrader.cash_owner.models.RejectReason;
 import com.protrader.cash_owner.models.views.AccountView;
 import com.protrader.cash_owner.models.views.OrderView;
 import com.protrader.proto.exchange.v1.AccountSnapshot;
+import com.protrader.proto.exchange.v1.AccountUpdate;
 import com.protrader.proto.exchange.v1.Balances;
 import com.protrader.proto.exchange.v1.CashRejectReason;
+import com.protrader.proto.exchange.v1.OrderEvent;
 import com.protrader.proto.exchange.v1.OrderState;
 import com.protrader.proto.exchange.v1.OrderStatus;
 import com.protrader.proto.exchange.v1.OrderType;
@@ -63,17 +67,55 @@ public final class ProtoMapper {
         AccountSnapshot.Builder b = AccountSnapshot.newBuilder()
                 .setFound(true)
                 .setAccountId(a.accountId())
-                .setAccountSeq(0)
-                .setBalances(Balances.newBuilder()
-                        .setCashFreeMinor(a.freeCashMinor())
-                        .setCashLockedMinor(a.lockedCashMinor())
-                        .setRealizedPnlMinor(0));
+                .setAccountSeq(a.accountSeq())
+                .setBalances(toBalances(a.freeCashMinor(), a.lockedCashMinor()));
         new TreeMap<>(a.holdings()).forEach((symbol, h) -> b.addPositions(Position.newBuilder()
                 .setSymbol(symbol)
                 .setFreeQty(h.freeQty())
                 .setLockedQty(h.lockedQty())));
         openOrders.forEach(o -> b.addOpenOrders(toOrderState(o)));
         return b.build();
+    }
+
+    private static Balances.Builder toBalances(long freeCashMinor, long lockedCashMinor) {
+        return Balances.newBuilder()
+                .setCashFreeMinor(freeCashMinor)
+                .setCashLockedMinor(lockedCashMinor)
+                .setRealizedPnlMinor(0);
+    }
+
+    public static AccountUpdate toAccountUpdate(AccountChange c) {
+        OrderEvent.Builder event = OrderEvent.newBuilder()
+                .setKind(toProto(c.kind()))
+                .setOrder(toOrderState(c.order()))
+                .setEngineSeq(c.engineSeq());
+        if (c.kind() == AccountChangeKind.PARTIAL_FILL || c.kind() == AccountChangeKind.FILL) {
+            event.setFillPriceMinor(c.fillPriceMinor()).setFillQuantity(c.fillQty());
+        }
+        AccountUpdate.Builder b = AccountUpdate.newBuilder()
+                .setAccountId(c.accountId())
+                .setAccountSeq(c.accountSeq())
+                .setOrderEvent(event)
+                .setTs(c.ts())
+                .setBalances(toBalances(c.balances().freeCashMinor(), c.balances().lockedCashMinor()));
+        if (c.position() != null) {
+            b.addPositions(Position.newBuilder()
+                    .setSymbol(c.order().symbol())
+                    .setFreeQty(c.position().freeQty())
+                    .setLockedQty(c.position().lockedQty()));
+        }
+        return b.build();
+    }
+
+    public static OrderEvent.Kind toProto(AccountChangeKind kind) {
+        return switch (kind) {
+            case NEW -> OrderEvent.Kind.KIND_NEW;
+            case PARTIAL_FILL -> OrderEvent.Kind.KIND_PARTIAL_FILL;
+            case FILL -> OrderEvent.Kind.KIND_FILL;
+            case CANCELED -> OrderEvent.Kind.KIND_CANCELED;
+            case EXPIRED -> OrderEvent.Kind.KIND_EXPIRED;
+            case REJECTED -> OrderEvent.Kind.KIND_REJECTED;
+        };
     }
 
     public static CashRejectReason toProto(RejectReason reason) {
