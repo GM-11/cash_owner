@@ -523,12 +523,19 @@ public final class Ledger {
     private AccountChange buildChange(EngineEvent e, Order order, AccountChangeKind kind, long fillPriceMinor,
             long fillQty) {
         Account account = accounts.get(order.getKey().accountId());
-        long seq = account.nextAccountSeq();
         BalancesView balances = new BalancesView(account.getFreeCashMinor(), account.getLockedCashMinor());
         boolean fill = kind == AccountChangeKind.PARTIAL_FILL || kind == AccountChangeKind.FILL;
         boolean sellEnded = order.getSide() == Side.SELL && kind != AccountChangeKind.NEW;
-        Holding holding = fill || sellEnded ? account.getHoldings().get(order.getSymbol()) : null;
-        HoldingView position = holding == null ? null : HoldingView.of(holding);
+        HoldingView position = null;
+        if (fill || sellEnded) {
+            Holding holding = account.getHoldings().get(order.getSymbol());
+            if (holding == null) {
+                throw new IllegalStateException("no holding for symbol " + order.getSymbol() + " on account "
+                        + account.getAccountId() + " after " + kind + " of " + order.getKey());
+            }
+            position = HoldingView.of(holding);
+        }
+        long seq = account.nextAccountSeq();
         return new AccountChange(account.getAccountId(), seq, kind, OrderView.of(order), fillPriceMinor, fillQty,
                 e.seq(), e.ts(), balances, position);
     }
@@ -553,8 +560,11 @@ public final class Ledger {
         }
         onRemainderEnded(ref, e.qty(), reason);
         Order order = orders.get(byEngineRef.get(ref));
-        AccountChangeKind kind = reason == DoneReason.CANCELED ? AccountChangeKind.CANCELED
-                : AccountChangeKind.EXPIRED;
+        AccountChangeKind kind = switch (reason) {
+            case CANCELED -> AccountChangeKind.CANCELED;
+            case EXPIRED -> AccountChangeKind.EXPIRED;
+            default -> throw new IllegalArgumentException("reason must be CANCELED or EXPIRED: " + reason);
+        };
         return ApplyResult.applied(List.of(buildChange(e, order, kind, 0, 0)));
     }
 
