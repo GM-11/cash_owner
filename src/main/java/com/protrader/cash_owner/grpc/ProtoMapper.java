@@ -8,6 +8,7 @@ import com.protrader.cash_owner.models.AccountChange;
 import com.protrader.cash_owner.models.AccountChangeKind;
 import com.protrader.cash_owner.models.RejectReason;
 import com.protrader.cash_owner.models.views.AccountView;
+import com.protrader.cash_owner.models.views.HoldingView;
 import com.protrader.cash_owner.models.views.OrderView;
 import com.protrader.proto.exchange.v1.AccountSnapshot;
 import com.protrader.proto.exchange.v1.AccountUpdate;
@@ -68,20 +69,26 @@ public final class ProtoMapper {
                 .setFound(true)
                 .setAccountId(a.accountId())
                 .setAccountSeq(a.accountSeq())
-                .setBalances(toBalances(a.freeCashMinor(), a.lockedCashMinor()));
-        new TreeMap<>(a.holdings()).forEach((symbol, h) -> b.addPositions(Position.newBuilder()
-                .setSymbol(symbol)
-                .setFreeQty(h.freeQty())
-                .setLockedQty(h.lockedQty())));
+                .setBalances(toBalances(a.freeCashMinor(), a.lockedCashMinor(), a.realizedPnlMinor()));
+        new TreeMap<>(a.holdings()).forEach((symbol, h) -> b.addPositions(toPosition(symbol, h)));
         openOrders.forEach(o -> b.addOpenOrders(toOrderState(o)));
         return b.build();
     }
 
-    private static Balances.Builder toBalances(long freeCashMinor, long lockedCashMinor) {
+    private static Balances.Builder toBalances(long freeCashMinor, long lockedCashMinor, long realizedPnlMinor) {
         return Balances.newBuilder()
                 .setCashFreeMinor(freeCashMinor)
                 .setCashLockedMinor(lockedCashMinor)
-                .setRealizedPnlMinor(0);
+                .setRealizedPnlMinor(realizedPnlMinor);
+    }
+
+    private static Position.Builder toPosition(int symbol, HoldingView h) {
+        return Position.newBuilder()
+                .setSymbol(symbol)
+                .setFreeQty(h.freeQty())
+                .setLockedQty(h.lockedQty())
+                .setAvgPriceMinor(h.avgPriceMinor())
+                .setRealizedPnlMinor(h.realizedPnlMinor());
     }
 
     public static AccountUpdate toAccountUpdate(AccountChange c) {
@@ -97,12 +104,10 @@ public final class ProtoMapper {
                 .setAccountSeq(c.accountSeq())
                 .setOrderEvent(event)
                 .setTs(c.ts())
-                .setBalances(toBalances(c.balances().freeCashMinor(), c.balances().lockedCashMinor()));
+                .setBalances(toBalances(c.balances().freeCashMinor(), c.balances().lockedCashMinor(),
+                        c.balances().realizedPnlMinor()));
         if (c.position() != null) {
-            b.addPositions(Position.newBuilder()
-                    .setSymbol(c.order().symbol())
-                    .setFreeQty(c.position().freeQty())
-                    .setLockedQty(c.position().lockedQty()));
+            b.addPositions(toPosition(c.order().symbol(), c.position()));
         }
         return b.build();
     }

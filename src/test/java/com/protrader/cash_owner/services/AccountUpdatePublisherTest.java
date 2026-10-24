@@ -22,9 +22,11 @@ import com.protrader.cash_owner.models.OrderStage;
 import com.protrader.cash_owner.models.Side;
 import com.protrader.cash_owner.models.views.BalancesView;
 import com.protrader.cash_owner.models.views.OrderView;
-import com.protrader.proto.exchange.v1.AccountUpdate;
 
-/** Step 5, piece 6: one publisher thread sends account changes in order and never makes the owner wait. */
+/**
+ * Step 5, piece 6: one publisher thread sends account changes in order and
+ * never makes the owner wait.
+ */
 class AccountUpdatePublisherTest {
 
     private static final String THREAD_NAME = "account-update-publisher";
@@ -41,7 +43,7 @@ class AccountUpdatePublisherTest {
     private static AccountChange change(long accountId, long accountSeq) {
         OrderView order = new OrderView(new OrderKey(accountId, "c"), 1, Side.BUY, 10_000, 10, 10, 0, 0, 5,
                 OrderStage.OPEN, null);
-        BalancesView balances = new BalancesView(900_000, 100_000);
+        BalancesView balances = new BalancesView(900_000, 100_000, 0);
         return new AccountChange(accountId, accountSeq, AccountChangeKind.NEW, order, 0, 0, 7, 1234, balances, null);
     }
 

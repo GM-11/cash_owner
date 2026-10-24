@@ -54,7 +54,7 @@ public final class Ledger {
         Account account = new Account(accountId, cashMinor, 0);
         for (Map.Entry<Integer, Long> e : shares.entrySet()) {
             Map<Integer, Holding> holdings = account.getHoldings();
-            holdings.put(e.getKey(), new Holding(e.getValue(), 0));
+            holdings.put(e.getKey(), new Holding(e.getValue(), 0, 0, 0));
         }
         accounts.put(accountId, account);
     }
@@ -202,12 +202,30 @@ public final class Ledger {
                 throw new IllegalStateException("negative cash for account " + account.getAccountId() + ": free="
                         + account.getFreeCashMinor() + " locked=" + account.getLockedCashMinor());
             }
+            long totalRealizedPnl = 0;
             for (Map.Entry<Integer, Holding> e : account.getHoldings().entrySet()) {
                 Holding h = e.getValue();
+                totalRealizedPnl += h.getRealizedPnlMinorForSymbol();
                 if (h.getFreeQty() < 0 || h.getLockedQty() < 0) {
                     throw new IllegalStateException("negative shares for account " + account.getAccountId() + " symbol "
                             + e.getKey() + ": free=" + h.getFreeQty() + " locked=" + h.getLockedQty());
                 }
+                if (h.getTotalCostMinor() < 0) {
+                    throw new IllegalStateException("negative cost for account " + account.getAccountId() + " symbol "
+                            + e.getKey() + ": totalCost=" + h.getTotalCostMinor());
+                }
+                if (h.getFreeQty() + h.getLockedQty() == 0 && h.getTotalCostMinor() != 0) {
+                    throw new IllegalStateException(
+                            "negative total shares for account " + account.getAccountId() + " symbol "
+                                    + e.getKey() + ": free=" + h.getFreeQty() + " locked=" + h.getLockedQty()
+                                    + " totalCost=" + h.getTotalCostMinor());
+                }
+            }
+
+            if (totalRealizedPnl != account.getRealizedPnlMinorTotal()) {
+                throw new IllegalStateException("realized PnL mismatch for account " + account.getAccountId()
+                        + ": totalRealizedPnl=" + totalRealizedPnl + " realizedPnlTotal="
+                        + account.getRealizedPnlMinorTotal());
             }
         }
 
@@ -302,13 +320,14 @@ public final class Ledger {
         }
 
         long limitPrice = order.getLimitPriceMinor();
+        Holding holding = account.getHoldings().get(order.getSymbol());
         if (order.getSide() == Side.BUY) {
             if (tradePriceMinor > limitPrice) {
                 throw new IllegalArgumentException(
                         "buy filled at " + tradePriceMinor + ", above its limit " + limitPrice);
             }
         } else {
-            if (account.getHoldings().get(order.getSymbol()) == null) {
+            if (holding == null) {
                 throw new IllegalStateException("no holding for symbol " + order.getSymbol());
             }
             if (tradePriceMinor < limitPrice) {
@@ -319,8 +338,15 @@ public final class Ledger {
 
         // the amounts onFill will compute; checked here so an overflow throws before
         // anything changes
-        Math.multiplyExact(tradePriceMinor, qty);
+        long priceTimesQty = Math.multiplyExact(tradePriceMinor, qty);
         Math.multiplyExact(limitPrice, qty);
+        if (order.getSide() == Side.BUY) {
+            // a buy may have no holding yet; onFill creates it with zero cost
+            long currentCost = holding == null ? 0 : holding.getTotalCostMinor();
+            Math.addExact(currentCost, priceTimesQty);
+        } else {
+            Math.multiplyExact(holding.getTotalCostMinor(), qty);
+        }
         return order;
     }
 
@@ -342,12 +368,19 @@ public final class Ledger {
             account.setLockedCashMinor(account.getLockedCashMinor() - lockReleased);
             account.setFreeCashMinor(account.getFreeCashMinor() + refund);
             holding.setFreeQty(holding.getFreeQty() + qty);
+            holding.setTotalCostMinor(Math.addExact(holding.getTotalCostMinor(), priceTimesQty));
         } else {
             Holding holding = account.getHoldings().get(order.getSymbol());
             long proceeds = priceTimesQty;
+            long heldQty = holding.getLockedQty() + holding.getFreeQty();
+            long costRemoved = Math.divideExact(Math.multiplyExact(holding.getTotalCostMinor(), qty), heldQty);
+            long pnl = Math.multiplyExact(tradePriceMinor, qty) - costRemoved;
 
             account.setFreeCashMinor(account.getFreeCashMinor() + proceeds);
             holding.setLockedQty(holding.getLockedQty() - qty);
+            holding.setTotalCostMinor(holding.getTotalCostMinor() - costRemoved);
+            holding.setRealizedPnlMinorForSymbol(holding.getRealizedPnlMinorForSymbol() + pnl);
+            account.setRealizedPnlMinorTotal(account.getRealizedPnlMinorTotal() + pnl);
         }
 
         order.setRemainingQty(remaining - qty);
@@ -523,7 +556,8 @@ public final class Ledger {
     private AccountChange buildChange(EngineEvent e, Order order, AccountChangeKind kind, long fillPriceMinor,
             long fillQty) {
         Account account = accounts.get(order.getKey().accountId());
-        BalancesView balances = new BalancesView(account.getFreeCashMinor(), account.getLockedCashMinor());
+        BalancesView balances = new BalancesView(account.getFreeCashMinor(), account.getLockedCashMinor(),
+                account.getRealizedPnlMinorTotal());
         boolean fill = kind == AccountChangeKind.PARTIAL_FILL || kind == AccountChangeKind.FILL;
         boolean sell = order.getSide() == Side.SELL;
         HoldingView position = null;

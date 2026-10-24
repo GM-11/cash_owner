@@ -33,11 +33,11 @@ class ProtoMapperAccountUpdateTest {
     }
 
     private static AccountView balances() {
-        return new AccountView(21, 901_200, 40_000, Map.of(MOOG, new HoldingView(6, 0)), 9);
+        return new AccountView(21, 901_200, 40_000, Map.of(MOOG, new HoldingView(6, 0, 58_800, 0)), 9, 0);
     }
 
     private static AccountChange change(AccountChangeKind kind, HoldingView position, long price, long qty) {
-        return new AccountChange(21, 9, kind, order(), price, qty, 33, 5_555, new BalancesView(901_200, 40_000), position);
+        return new AccountChange(21, 9, kind, order(), price, qty, 33, 5_555, new BalancesView(901_200, 40_000, 0), position);
     }
 
     @Test
@@ -68,7 +68,7 @@ class ProtoMapperAccountUpdateTest {
     @Test
     void idsSeqsAndBalancesAreCopiedExactly() {
         AccountUpdate u = ProtoMapper.toAccountUpdate(change(AccountChangeKind.PARTIAL_FILL,
-                new HoldingView(6, 0), 9_800, 6));
+                new HoldingView(6, 0, 58_800, 0), 9_800, 6));
 
         assertEquals(21, u.getAccountId());
         assertEquals(9, u.getAccountSeq());
@@ -84,7 +84,7 @@ class ProtoMapperAccountUpdateTest {
 
     @Test
     void positionsHoldTheOnePositionOrNothing() {
-        AccountUpdate with = ProtoMapper.toAccountUpdate(change(AccountChangeKind.FILL, new HoldingView(6, 2),
+        AccountUpdate with = ProtoMapper.toAccountUpdate(change(AccountChangeKind.FILL, new HoldingView(6, 2, 78_400, 0),
                 9_800, 6));
         assertEquals(1, with.getPositionsCount());
         assertEquals(MOOG, with.getPositions(0).getSymbol());
@@ -93,6 +93,36 @@ class ProtoMapperAccountUpdateTest {
 
         AccountUpdate without = ProtoMapper.toAccountUpdate(change(AccountChangeKind.NEW, null, 0, 0));
         assertEquals(0, without.getPositionsCount());
+    }
+
+    @Test
+    void positionAndBalancesCarryAverageAndRealizedPnl() {
+        // 8 shares costing 78,400 paise → average 9,800; realized ₹12.34 on the symbol and ₹56.78 on the account
+        AccountChange c = new AccountChange(21, 9, AccountChangeKind.FILL, order(), 9_800, 6, 33, 5_555,
+                new BalancesView(901_200, 40_000, 5_678), new HoldingView(6, 2, 78_400, 1_234));
+
+        AccountUpdate u = ProtoMapper.toAccountUpdate(c);
+
+        assertEquals(9_800, u.getPositions(0).getAvgPriceMinor());
+        assertEquals(1_234, u.getPositions(0).getRealizedPnlMinor());
+        assertEquals(5_678, u.getBalances().getRealizedPnlMinor());
+    }
+
+    @Test
+    void snapshotCarriesAverageAndRealizedPnl() {
+        AccountView view = new AccountView(21, 901_200, 40_000, Map.of(MOOG, new HoldingView(6, 0, 58_800, -300)), 9,
+                -300);
+
+        AccountSnapshot s = ProtoMapper.toSnapshot(21, Optional.of(view), List.of());
+
+        assertEquals(9_800, s.getPositions(0).getAvgPriceMinor());
+        assertEquals(-300, s.getPositions(0).getRealizedPnlMinor());
+        assertEquals(-300, s.getBalances().getRealizedPnlMinor());
+    }
+
+    @Test
+    void averageIsZeroWithNoShares() {
+        assertEquals(0, new HoldingView(0, 0, 0, 500).avgPriceMinor());
     }
 
     @Test

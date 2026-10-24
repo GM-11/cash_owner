@@ -12,5 +12,6 @@ import lombok.Setter;
 public final class Holding {
     long freeQty;
     long lockedQty;
-
+    long totalCostMinor;
+    long realizedPnlMinorForSymbol;
 }

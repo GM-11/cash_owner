@@ -108,6 +108,13 @@ class LedgerAccountChangeTest {
         return mine.get(0);
     }
 
+    /** Compares share counts only; cost and P&L have their own tests (LedgerPnlTest). */
+    private static void assertShares(long freeQty, long lockedQty, HoldingView position) {
+        assertNotNull(position);
+        assertEquals(freeQty, position.freeQty(), "free qty");
+        assertEquals(lockedQty, position.lockedQty(), "locked qty");
+    }
+
     private AccountView view(long accountId) {
         return ledger.account(accountId).orElseThrow();
     }
@@ -127,7 +134,7 @@ class LedgerAccountChangeTest {
 
         assertEquals(ALICE, c.accountId());
         assertEquals(AccountChangeKind.NEW, c.kind());
-        assertEquals(new HoldingView(14, 6), c.position());
+        assertShares(14, 6, c.position());
         assertEquals(view(ALICE).holdings().get(MOOG), c.position());
     }
 
@@ -197,7 +204,7 @@ class LedgerAccountChangeTest {
         assertEquals(6, bob.fillQty());
         assertEquals(rupees(400), bob.balances().lockedCashMinor());
         assertEquals(rupees(9_012), bob.balances().freeCashMinor());
-        assertEquals(new HoldingView(6, 0), bob.position());
+        assertShares(6, 0, bob.position());
         assertEquals(t.seq(), bob.engineSeq());
 
         AccountChange alice = forAccount(r, ALICE);
@@ -205,7 +212,7 @@ class LedgerAccountChangeTest {
         assertEquals(rupees(98), alice.fillPriceMinor());
         assertEquals(6, alice.fillQty());
         assertEquals(rupees(588), alice.balances().freeCashMinor());
-        assertEquals(new HoldingView(14, 0), alice.position());
+        assertShares(14, 0, alice.position());
         assertEquals(t.seq(), alice.engineSeq());
     }
 
@@ -314,7 +321,7 @@ class LedgerAccountChangeTest {
 
         assertEquals(AccountChangeKind.CANCELED, c.kind());
         assertEquals(before + 1, c.accountSeq());
-        assertEquals(new HoldingView(20, 0), c.position());
+        assertShares(20, 0, c.position());
     }
 
     @Test
@@ -333,7 +340,7 @@ class LedgerAccountChangeTest {
         assertEquals(DoneReason.EXPIRED, buy.order().doneReason());
         assertEquals(AccountChangeKind.EXPIRED, sell.kind());
         assertEquals(aliceBefore + 1, sell.accountSeq());
-        assertEquals(new HoldingView(20, 0), sell.position());
+        assertShares(20, 0, sell.position());
     }
 
     @Test
@@ -351,7 +358,7 @@ class LedgerAccountChangeTest {
         assertNull(buy.position());
         assertEquals(AccountChangeKind.REJECTED, sell.kind());
         assertEquals(aliceBefore + 1, sell.accountSeq());
-        assertEquals(new HoldingView(20, 0), sell.position());
+        assertShares(20, 0, sell.position());
 
         // the rejected order's record is kept, unlike a refused one
         var kept = ledger.order(new OrderKey(BOB, "b1")).orElseThrow();

@@ -17,6 +17,7 @@ public final class Account {
     @Setter(AccessLevel.NONE)
     long accountSeq;
     final Map<Integer, Holding> holdings = new HashMap<>();
+    long realizedPnlMinorTotal;
 
     public Account(long accountId, long freeCashMinor, long lockedCashMinor) {
         this.accountId = accountId;
@@ -29,6 +30,6 @@ public final class Account {
     }
 
     public Holding getHoldingFromSymbol(int symbol) {
-        return holdings.computeIfAbsent(symbol, ignored -> new Holding(0, 0));
+        return holdings.computeIfAbsent(symbol, ignored -> new Holding(0, 0, 0, 0));
     }
 }
