@@ -121,6 +121,17 @@ class LedgerAccountChangeTest {
     // ---------------------------------------------------------------- 1-2
 
     @Test
+    void sellAcceptedCarriesTheLockedShares() {
+        // Alice holds 20 MOOG; placing sell 6 moved 6 from free to locked, so her NEW must show 14 free / 6 locked
+        AccountChange c = only(applyOk(accepted(1, ALICE, "s1", Side.SELL)));
+
+        assertEquals(ALICE, c.accountId());
+        assertEquals(AccountChangeKind.NEW, c.kind());
+        assertEquals(new HoldingView(14, 6), c.position());
+        assertEquals(view(ALICE).holdings().get(MOOG), c.position());
+    }
+
+    @Test
     void acceptedMakesOneNewChange() {
         applyOk(accepted(1, ALICE, "s1", Side.SELL));
         long before = view(BOB).accountSeq();
@@ -516,8 +527,8 @@ class LedgerAccountChangeTest {
                 assertEquals(l.account(c.accountId()).orElseThrow().lockedCashMinor(),
                         c.balances().lockedCashMinor(), where);
                 boolean fill = c.kind() == AccountChangeKind.PARTIAL_FILL || c.kind() == AccountChangeKind.FILL;
-                // position = shares moved: any fill, or a sell that ends (its locked shares return to free)
-                if (fill || (c.order().side() == Side.SELL && c.kind() != AccountChangeKind.NEW)) {
+                // position = shares moved: any fill, or any change to a sell (NEW locks shares, an end frees them)
+                if (fill || c.order().side() == Side.SELL) {
                     assertNotNull(c.position(), where);
                     assertEquals(l.account(c.accountId()).orElseThrow().holdings().get(c.order().symbol()),
                             c.position(), where);
