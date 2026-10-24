@@ -525,9 +525,9 @@ public final class Ledger {
         Account account = accounts.get(order.getKey().accountId());
         BalancesView balances = new BalancesView(account.getFreeCashMinor(), account.getLockedCashMinor());
         boolean fill = kind == AccountChangeKind.PARTIAL_FILL || kind == AccountChangeKind.FILL;
-        boolean sellEnded = order.getSide() == Side.SELL && kind != AccountChangeKind.NEW;
+        boolean sell = order.getSide() == Side.SELL;
         HoldingView position = null;
-        if (fill || sellEnded) {
+        if (fill || sell) {
             Holding holding = account.getHoldings().get(order.getSymbol());
             if (holding == null) {
                 throw new IllegalStateException("no holding for symbol " + order.getSymbol() + " on account "
