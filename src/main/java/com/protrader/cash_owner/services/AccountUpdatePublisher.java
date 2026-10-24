@@ -29,7 +29,7 @@ public class AccountUpdatePublisher implements SmartLifecycle {
     private static final long STOP_WAIT_MILLIS = 5_000;
 
     /** Queue entry that ends the thread; compared by identity, never sent. */
-    private static final AccountChange STOP = new AccountChange(0, 0, null, null, 0, 0, 0, 0, null, null);
+    private static final AccountChange STOP = new AccountChange(0, 0, null, null, 0, 0, 0, 0, null, null, null);
 
     private final Consumer<AccountUpdate> sink;
     private final LinkedBlockingQueue<AccountChange> queue = new LinkedBlockingQueue<>();

@@ -37,7 +37,7 @@ class ProtoMapperAccountUpdateTest {
     }
 
     private static AccountChange change(AccountChangeKind kind, HoldingView position, long price, long qty) {
-        return new AccountChange(21, 9, kind, order(), price, qty, 33, 5_555, new BalancesView(901_200, 40_000, 0), position);
+        return new AccountChange(21, 9, kind, order(), price, qty, 33, 5_555, new BalancesView(901_200, 40_000, 0), position, null);
     }
 
     @Test
@@ -49,6 +49,8 @@ class ProtoMapperAccountUpdateTest {
         assertEquals(OrderEvent.Kind.KIND_EXPIRED, ProtoMapper.toProto(AccountChangeKind.EXPIRED));
         assertEquals(OrderEvent.Kind.KIND_REJECTED, ProtoMapper.toProto(AccountChangeKind.REJECTED));
         for (AccountChangeKind kind : AccountChangeKind.values()) {
+            if (kind == AccountChangeKind.TRANSFER)
+                continue; // not an order event; see ProtoMapperTransferTest
             AccountUpdate u = ProtoMapper.toAccountUpdate(change(kind, null, 0, 0));
             assertEquals(ProtoMapper.toProto(kind), u.getOrderEvent().getKind(), kind.toString());
         }
@@ -57,6 +59,8 @@ class ProtoMapperAccountUpdateTest {
     @Test
     void fillFieldsAreSetForFillsOnly() {
         for (AccountChangeKind kind : AccountChangeKind.values()) {
+            if (kind == AccountChangeKind.TRANSFER)
+                continue; // not an order event; see ProtoMapperTransferTest
             boolean fill = kind == AccountChangeKind.PARTIAL_FILL || kind == AccountChangeKind.FILL;
             // even if a caller left stray fill numbers on a non-fill, they must not reach the wire
             OrderEvent ev = ProtoMapper.toAccountUpdate(change(kind, null, 9_800, 6)).getOrderEvent();
@@ -99,7 +103,7 @@ class ProtoMapperAccountUpdateTest {
     void positionAndBalancesCarryAverageAndRealizedPnl() {
         // 8 shares costing 78,400 paise → average 9,800; realized ₹12.34 on the symbol and ₹56.78 on the account
         AccountChange c = new AccountChange(21, 9, AccountChangeKind.FILL, order(), 9_800, 6, 33, 5_555,
-                new BalancesView(901_200, 40_000, 5_678), new HoldingView(6, 2, 78_400, 1_234));
+                new BalancesView(901_200, 40_000, 5_678), new HoldingView(6, 2, 78_400, 1_234), null);
 
         AccountUpdate u = ProtoMapper.toAccountUpdate(c);
 

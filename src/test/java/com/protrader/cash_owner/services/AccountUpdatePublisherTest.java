@@ -44,7 +44,7 @@ class AccountUpdatePublisherTest {
         OrderView order = new OrderView(new OrderKey(accountId, "c"), 1, Side.BUY, 10_000, 10, 10, 0, 0, 5,
                 OrderStage.OPEN, null, false);
         BalancesView balances = new BalancesView(900_000, 100_000, 0);
-        return new AccountChange(accountId, accountSeq, AccountChangeKind.NEW, order, 0, 0, 7, 1234, balances, null);
+        return new AccountChange(accountId, accountSeq, AccountChangeKind.NEW, order, 0, 0, 7, 1234, balances, null, null);
     }
 
     private static void awaitTrue(BooleanSupplier condition, String what) throws InterruptedException {
@@ -122,7 +122,7 @@ class AccountUpdatePublisherTest {
             seen.add(u.getAccountSeq());
         });
         publisher.start();
-        AccountChange unmappable = new AccountChange(5, 3, AccountChangeKind.NEW, null, 0, 0, 7, 0, null, null);
+        AccountChange unmappable = new AccountChange(5, 3, AccountChangeKind.NEW, null, 0, 0, 7, 0, null, null, null);
 
         publisher.submit(List.of(change(5, 1), change(5, 2), unmappable, change(5, 4), change(5, 5)));
 

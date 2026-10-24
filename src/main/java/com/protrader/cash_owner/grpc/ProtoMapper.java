@@ -7,6 +7,8 @@ import java.util.TreeMap;
 import com.protrader.cash_owner.models.AccountChange;
 import com.protrader.cash_owner.models.AccountChangeKind;
 import com.protrader.cash_owner.models.RejectReason;
+import com.protrader.cash_owner.models.TransferResult;
+import com.protrader.cash_owner.models.views.BalancesView;
 import com.protrader.cash_owner.models.views.AccountView;
 import com.protrader.cash_owner.models.views.HoldingView;
 import com.protrader.cash_owner.models.views.OrderView;
@@ -20,6 +22,9 @@ import com.protrader.proto.exchange.v1.OrderStatus;
 import com.protrader.proto.exchange.v1.OrderType;
 import com.protrader.proto.exchange.v1.Position;
 import com.protrader.proto.exchange.v1.TimeInForce;
+import com.protrader.proto.exchange.v1.TransferAck;
+import com.protrader.proto.exchange.v1.TransferEvent;
+import com.protrader.proto.exchange.v1.TransferStatus;
 
 /** Ledger models <-> proto messages. Static, no Spring. */
 public final class ProtoMapper {
@@ -93,6 +98,19 @@ public final class ProtoMapper {
     }
 
     public static AccountUpdate toAccountUpdate(AccountChange c) {
+        if (c.transfer() != null) {
+            return AccountUpdate.newBuilder()
+                    .setAccountId(c.accountId())
+                    .setAccountSeq(c.accountSeq())
+                    .setTs(c.ts())
+                    .setTransfer(TransferEvent.newBuilder()
+                            .setTransferId(c.transfer().transferId())
+                            .setDeposit(c.transfer().deposit())
+                            .setAmountMinor(c.transfer().amountMinor()))
+                    .setBalances(toBalances(c.balances().freeCashMinor(), c.balances().lockedCashMinor(),
+                            c.balances().realizedPnlMinor()))
+                    .build();
+        }
         OrderEvent.Builder event = OrderEvent.newBuilder()
                 .setKind(toProto(c.kind()))
                 .setOrder(toOrderState(c.order()))
@@ -122,7 +140,30 @@ public final class ProtoMapper {
             case EXPIRED -> OrderEvent.Kind.KIND_EXPIRED;
             case REJECTED -> OrderEvent.Kind.KIND_REJECTED;
             case CANCEL_REJECTED -> OrderEvent.Kind.KIND_CANCEL_REJECTED;
+            case TRANSFER -> throw new IllegalArgumentException("TRANSFER is not an order event kind");
         };
+    }
+
+    public static TransferAck toTransferAck(TransferResult result) {
+        return switch (result) {
+            case TransferResult.Applied a -> TransferAck.newBuilder()
+                    .setStatus(TransferStatus.TRANSFER_STATUS_APPLIED)
+                    .setBalances(toBalances(a.change().balances()))
+                    .setAccountSeq(a.change().accountSeq()).build();
+            case TransferResult.Duplicate d -> TransferAck.newBuilder()
+                    .setStatus(TransferStatus.TRANSFER_STATUS_DUPLICATE)
+                    .setBalances(toBalances(d.balances())).setAccountSeq(d.accountSeq()).build();
+            case TransferResult.InsufficientCash i -> TransferAck.newBuilder()
+                    .setStatus(TransferStatus.TRANSFER_STATUS_INSUFFICIENT_CASH)
+                    .setShortfallMinor(i.shortfallMinor())
+                    .setBalances(toBalances(i.balances())).setAccountSeq(i.accountSeq()).build();
+            case TransferResult.UnknownAccount u -> TransferAck.newBuilder()
+                    .setStatus(TransferStatus.TRANSFER_STATUS_UNKNOWN_ACCOUNT).build();
+        };
+    }
+
+    private static Balances.Builder toBalances(BalancesView b) {
+        return toBalances(b.freeCashMinor(), b.lockedCashMinor(), b.realizedPnlMinor());
     }
 
     public static CashRejectReason toProto(RejectReason reason) {

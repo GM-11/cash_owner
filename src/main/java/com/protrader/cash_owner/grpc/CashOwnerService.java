@@ -2,6 +2,7 @@ package com.protrader.cash_owner.grpc;
 
 import com.protrader.cash_owner.orders.CancelOrderFlow;
 import com.protrader.cash_owner.orders.PlaceOrderFlow;
+import com.protrader.cash_owner.orders.TransferFlow;
 import com.protrader.cash_owner.owner.LedgerOwner;
 import com.protrader.cash_owner.owner.OwnerBusyException;
 import com.protrader.cash_owner.owner.OwnerUnavailableException;
@@ -43,13 +44,15 @@ public class CashOwnerService extends CashOwnerGrpc.CashOwnerImplBase {
     private final AccountUpdateBus updates;
     private final PlaceOrderFlow placeOrderFlow;
     private final CancelOrderFlow cancelOrderFlow;
+    private final TransferFlow transferFlow;
     private final LedgerOwner owner;
 
     public CashOwnerService(AccountUpdateBus updates, PlaceOrderFlow placeOrderFlow,
-            CancelOrderFlow cancelOrderFlow, LedgerOwner owner) {
+            CancelOrderFlow cancelOrderFlow, TransferFlow transferFlow, LedgerOwner owner) {
         this.updates = updates;
         this.placeOrderFlow = placeOrderFlow;
         this.cancelOrderFlow = cancelOrderFlow;
+        this.transferFlow = transferFlow;
         this.owner = owner;
     }
 
@@ -147,12 +150,12 @@ public class CashOwnerService extends CashOwnerGrpc.CashOwnerImplBase {
 
     @Override
     public void deposit(TransferRequest request, StreamObserver<TransferAck> out) {
-        notBuilt(out, "Deposit");
+        transferFlow.transfer(true, request, out);
     }
 
     @Override
     public void withdraw(TransferRequest request, StreamObserver<TransferAck> out) {
-        notBuilt(out, "Withdraw");
+        transferFlow.transfer(false, request, out);
     }
 
     @Override

@@ -7,5 +7,6 @@ public enum AccountChangeKind {
     CANCELED,
     EXPIRED,
     REJECTED,
-    CANCEL_REJECTED
+    CANCEL_REJECTED,
+    TRANSFER
 }

@@ -90,7 +90,7 @@ class CashOwnerServiceTest {
     @BeforeEach
     void setUp() {
         flow = new RecordingFlow();
-        service = new CashOwnerService(null, flow, null, null); // bus and owner are not used by PlaceOrder
+        service = new CashOwnerService(null, flow, null, null, null); // bus and owner are not used by PlaceOrder
     }
 
     private static PlaceOrderRequest.Builder valid() {

@@ -140,6 +140,23 @@ class LedgerRecordingTest {
     }
 
     @Test
+    void givenTransfers_whenApplied_thenExactlyOneTransferCommandIsRecordedAndRefusalsRecordNothing() {
+        openBuyerAndSeller();
+        recorded.clear();
+
+        List<LedgerCommand> deposit = recording(1, () -> ledger.deposit(1, "t1", 500, 99));
+        assertEquals(new LedgerCommand.Transfer(1, "t1", true, 500, 99), deposit.get(0));
+        List<LedgerCommand> created = recording(1, () -> ledger.deposit(7, "t1", 500, 99)); // creates the account
+        assertInstanceOf(LedgerCommand.Transfer.class, created.get(0));
+        recording(1, () -> ledger.withdraw(1, "w1", 100, 100));
+
+        recording(0, () -> ledger.deposit(1, "t1", 500, 99)); // Duplicate
+        recording(0, () -> ledger.withdraw(1, "big", 1_000_000_000, 100)); // InsufficientCash
+        recording(0, () -> ledger.withdraw(88, "w9", 1, 100)); // UnknownAccount
+        assertFalse(ledger.account(88).isPresent());
+    }
+
+    @Test
     void givenACancelPending_whenOnFillFinishesTheOrder_thenCancelPendingIsCleared() {
         openBuyerAndSeller();
         ledger.place(1, "b1", 1, Side.BUY, 100, 5);

@@ -40,7 +40,7 @@ final class RandomLedgerDriver {
             openAccount();
             return;
         }
-        switch (rnd.nextInt(22)) {
+        switch (rnd.nextInt(26)) {
             case 0 -> {
                 if (accounts < 6)
                     openAccount();
@@ -58,8 +58,26 @@ final class RandomLedgerDriver {
             case 17, 18 -> requestCancel();
             case 19 -> cancelRefused();
             case 20 -> duplicateEvent();
+            case 21, 22 -> deposit();
+            case 23, 24 -> withdraw();
             default -> place();
         }
+    }
+
+    /** Ids come from a small pool so some repeat (same or different content, same or other account). */
+    private String transferId() {
+        return "t" + rnd.nextInt(40);
+    }
+
+    private void deposit() {
+        long account = rnd.nextInt(8) == 0 ? 100 + rnd.nextInt(3) : 1 + rnd.nextInt(accounts); // 100+ do not exist yet
+        ledger.deposit(account, transferId(), 1 + rnd.nextInt(1_000_000), rnd.nextInt(1_000_000));
+    }
+
+    private void withdraw() {
+        long account = rnd.nextInt(10) == 0 ? 100 + rnd.nextInt(3) : 1 + rnd.nextInt(accounts);
+        long amount = rnd.nextInt(5) == 0 ? 999_999_999_999L : 1 + rnd.nextInt(2_000_000); // some too large
+        ledger.withdraw(account, transferId(), amount, rnd.nextInt(1_000_000));
     }
 
     private void openAccount() {

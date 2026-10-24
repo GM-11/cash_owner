@@ -10,6 +10,7 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.TreeMap;
 import java.util.function.Consumer;
+import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,6 +30,10 @@ import com.protrader.cash_owner.models.OrderStage;
 import com.protrader.cash_owner.models.PlaceResult;
 import com.protrader.cash_owner.models.RejectReason;
 import com.protrader.cash_owner.models.Side;
+import com.protrader.cash_owner.models.TransferKey;
+import com.protrader.cash_owner.models.TransferRecord;
+import com.protrader.cash_owner.models.TransferResult;
+import com.protrader.cash_owner.models.views.TransferView;
 import com.protrader.cash_owner.models.views.AccountView;
 import com.protrader.cash_owner.models.views.BalancesView;
 import com.protrader.cash_owner.models.views.HoldingView;
@@ -43,6 +48,10 @@ public final class Ledger {
     private final Map<OrderKey, Order> orders = new LinkedHashMap<>();
     private final Map<EngineRef, OrderKey> byEngineRef = new HashMap<>();
     private final Map<Integer, Long> lastApplied = new HashMap<>();
+    /** Applied transfers only, to answer repeats. */
+    private final Map<TransferKey, TransferRecord> transfers = new LinkedHashMap<>();
+
+    private static final Pattern TRANSFER_ID = Pattern.compile("^[A-Za-z0-9_-]{1,48}$");
 
     /**
      * Called with every input that changed state, at the successful end of the public method that took it and
@@ -216,6 +225,82 @@ public final class Ledger {
         recorder.accept(new LedgerCommand.CancelRefused(ref));
     }
 
+    public TransferResult deposit(long accountId, String transferId, long amountMinor, long tsMillis) {
+        return transfer(true, accountId, transferId, amountMinor, tsMillis);
+    }
+
+    public TransferResult withdraw(long accountId, String transferId, long amountMinor, long tsMillis) {
+        return transfer(false, accountId, transferId, amountMinor, tsMillis);
+    }
+
+    /**
+     * Checks everything, then changes. A deposit creates a missing account as part of the one recorded command.
+     * Only an applied transfer is remembered (and recorded); a refused one may be retried with the same id.
+     */
+    private TransferResult transfer(boolean deposit, long accountId, String transferId, long amountMinor,
+            long tsMillis) {
+        if (accountId <= 0) {
+            throw new IllegalArgumentException("accountId must be positive: " + accountId);
+        }
+        if (amountMinor <= 0) {
+            throw new IllegalArgumentException("amountMinor must be positive: " + amountMinor);
+        }
+        if (transferId == null || !TRANSFER_ID.matcher(transferId).matches()) {
+            throw new IllegalArgumentException("transferId must be 1-48 chars of [A-Za-z0-9_-]: " + transferId);
+        }
+        if (tsMillis < 0) {
+            throw new IllegalArgumentException("tsMillis must not be negative: " + tsMillis);
+        }
+
+        TransferKey key = new TransferKey(accountId, transferId);
+        Account account = accounts.get(accountId);
+        TransferRecord earlier = transfers.get(key);
+        if (earlier != null) {
+            if (earlier.deposit() != deposit || earlier.amountMinor() != amountMinor) {
+                log.warn("transfer {} on account {} repeated with different content: stored {} {}, got {} {}",
+                        transferId, accountId, earlier.deposit() ? "deposit" : "withdraw", earlier.amountMinor(),
+                        deposit ? "deposit" : "withdraw", amountMinor);
+            }
+            return new TransferResult.Duplicate(balancesOf(account), account.getAccountSeq());
+        }
+        if (account == null && !deposit) {
+            return new TransferResult.UnknownAccount();
+        }
+
+        long free = account == null ? 0 : account.getFreeCashMinor();
+        long newFree;
+        if (deposit) {
+            try {
+                newFree = Math.addExact(free, amountMinor);
+            } catch (ArithmeticException e) {
+                throw new IllegalArgumentException("deposit of " + amountMinor + " overflows free cash " + free, e);
+            }
+        } else {
+            if (free < amountMinor) {
+                return new TransferResult.InsufficientCash(amountMinor - free, balancesOf(account),
+                        account.getAccountSeq());
+            }
+            newFree = free - amountMinor;
+        }
+
+        if (account == null) {
+            account = new Account(accountId, 0, 0);
+            accounts.put(accountId, account);
+        }
+        account.setFreeCashMinor(newFree);
+        transfers.put(key, new TransferRecord(deposit, amountMinor, tsMillis));
+        long seq = account.nextAccountSeq();
+        AccountChange change = new AccountChange(accountId, seq, AccountChangeKind.TRANSFER, null, 0, 0, 0,
+                tsMillis, balancesOf(account), null, new TransferView(transferId, deposit, amountMinor));
+        recorder.accept(new LedgerCommand.Transfer(accountId, transferId, deposit, amountMinor, tsMillis));
+        return new TransferResult.Applied(change);
+    }
+
+    private static BalancesView balancesOf(Account account) {
+        return new BalancesView(account.getFreeCashMinor(), account.getLockedCashMinor(),
+                account.getRealizedPnlMinorTotal());
+    }
+
     private void releaseLock(Order order) {
         Account account = accounts.get(order.getKey().accountId());
         if (order.getSide() == Side.BUY) {
@@ -284,6 +369,11 @@ public final class Ledger {
     }
 
     public void checkInvariants() {
+        for (TransferKey key : transfers.keySet()) {
+            if (!accounts.containsKey(key.accountId())) {
+                throw new IllegalStateException("transfer " + key + " belongs to an unknown account");
+            }
+        }
         for (Account account : accounts.values()) {
             if (account.getFreeCashMinor() < 0 || account.getLockedCashMinor() < 0) {
                 throw new IllegalStateException("negative cash for account " + account.getAccountId() + ": free="
@@ -696,7 +786,7 @@ public final class Ledger {
         }
         long seq = account.nextAccountSeq();
         return new AccountChange(account.getAccountId(), seq, kind, OrderView.of(order), fillPriceMinor, fillQty,
-                e.seq(), e.ts(), balances, position);
+                e.seq(), e.ts(), balances, position, null);
     }
 
     private void checkTradeSide(EngineEvent e, Order order, Side expectedSide) {
@@ -775,7 +865,15 @@ public final class Ledger {
         refStates.sort(Comparator.comparingInt(LedgerState.EngineRefEntry::symbol)
                 .thenComparingLong(LedgerState.EngineRefEntry::orderId));
 
-        return new LedgerState(accountStates, orderStates, refStates, new TreeMap<>(lastApplied));
+        List<LedgerState.TransferState> transferStates = new ArrayList<>();
+        for (Map.Entry<TransferKey, TransferRecord> e : transfers.entrySet()) {
+            transferStates.add(new LedgerState.TransferState(e.getKey().accountId(), e.getKey().transferId(),
+                    e.getValue().deposit(), e.getValue().amountMinor(), e.getValue().ts()));
+        }
+        transferStates.sort(Comparator.comparingLong(LedgerState.TransferState::accountId)
+                .thenComparing(LedgerState.TransferState::transferId));
+
+        return new LedgerState(accountStates, orderStates, refStates, new TreeMap<>(lastApplied), transferStates);
     }
 
     /** The Ledger a snapshot describes. Throws when the state points at things that are not there. */
@@ -819,6 +917,14 @@ public final class Ledger {
             ledger.byEngineRef.put(new EngineRef(entry.symbol(), entry.orderId()), key);
         }
         ledger.lastApplied.putAll(state.lastApplied());
+        for (LedgerState.TransferState t : state.transfers()) {
+            if (!ledger.accounts.containsKey(t.accountId())) {
+                throw new IllegalArgumentException("transfer " + t.transferId() + " belongs to unknown account "
+                        + t.accountId());
+            }
+            ledger.transfers.put(new TransferKey(t.accountId(), t.transferId()),
+                    new TransferRecord(t.deposit(), t.amountMinor(), t.ts()));
+        }
         return ledger;
     }
 }

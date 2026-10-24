@@ -12,7 +12,17 @@ import com.protrader.cash_owner.models.Side;
  * {@code orders} keeps the Ledger's insertion order (oldest first), so two equal Ledgers export equal states.
  */
 public record LedgerState(Map<Long, AccountState> accounts, List<OrderState> orders,
-        List<EngineRefEntry> byEngineRef, Map<Integer, Long> lastApplied) {
+        List<EngineRefEntry> byEngineRef, Map<Integer, Long> lastApplied, List<TransferState> transfers) {
+
+    /** Snapshots written before transfers existed have no list. */
+    public LedgerState {
+        if (transfers == null)
+            transfers = List.of();
+    }
+
+    /** Applied transfers, sorted by (accountId, transferId). */
+    public record TransferState(long accountId, String transferId, boolean deposit, long amountMinor, long ts) {
+    }
 
     public record AccountState(long accountId, long freeCashMinor, long lockedCashMinor, long accountSeq,
             long realizedPnlMinorTotal, Map<Integer, HoldingState> holdings) {

@@ -27,7 +27,8 @@ import com.protrader.cash_owner.services.Ledger;
         @JsonSubTypes.Type(value = LedgerCommand.EngineRejected.class, name = "EngineRejected"),
         @JsonSubTypes.Type(value = LedgerCommand.EngineEventApplied.class, name = "EngineEventApplied"),
         @JsonSubTypes.Type(value = LedgerCommand.RequestCancel.class, name = "RequestCancel"),
-        @JsonSubTypes.Type(value = LedgerCommand.CancelRefused.class, name = "CancelRefused") })
+        @JsonSubTypes.Type(value = LedgerCommand.CancelRefused.class, name = "CancelRefused"),
+        @JsonSubTypes.Type(value = LedgerCommand.Transfer.class, name = "Transfer") })
 public sealed interface LedgerCommand {
 
     void applyTo(Ledger ledger);
@@ -110,6 +111,18 @@ public sealed interface LedgerCommand {
         @Override
         public void applyTo(Ledger ledger) {
             ledger.onCancelRefused(ref);
+        }
+    }
+
+    /** Only recorded when the transfer was applied. A deposit may create the account. */
+    record Transfer(long accountId, String transferId, boolean deposit, long amountMinor, long tsMillis)
+            implements LedgerCommand {
+        @Override
+        public void applyTo(Ledger ledger) {
+            if (deposit)
+                ledger.deposit(accountId, transferId, amountMinor, tsMillis);
+            else
+                ledger.withdraw(accountId, transferId, amountMinor, tsMillis);
         }
     }
 }
