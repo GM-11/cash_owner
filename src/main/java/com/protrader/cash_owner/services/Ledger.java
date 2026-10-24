@@ -1,12 +1,15 @@
 package com.protrader.cash_owner.services;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.TreeMap;
+import java.util.function.Consumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,6 +33,8 @@ import com.protrader.cash_owner.models.views.AccountView;
 import com.protrader.cash_owner.models.views.BalancesView;
 import com.protrader.cash_owner.models.views.HoldingView;
 import com.protrader.cash_owner.models.views.OrderView;
+import com.protrader.cash_owner.models.state.LedgerState;
+import com.protrader.cash_owner.persistence.LedgerCommand;
 
 public final class Ledger {
     private static final Logger log = LoggerFactory.getLogger(Ledger.class);
@@ -38,6 +43,18 @@ public final class Ledger {
     private final Map<OrderKey, Order> orders = new LinkedHashMap<>();
     private final Map<EngineRef, OrderKey> byEngineRef = new HashMap<>();
     private final Map<Integer, Long> lastApplied = new HashMap<>();
+
+    /**
+     * Called with every input that changed state, at the successful end of the public method that took it and
+     * before that method returns. Internal calls never record. Off (no-op) while replaying a journal.
+     */
+    private Consumer<LedgerCommand> recorder = command -> {
+    };
+
+    public void setRecorder(Consumer<LedgerCommand> recorder) {
+        this.recorder = recorder == null ? command -> {
+        } : recorder;
+    }
 
     public void openAccount(long accountId, long cashMinor, Map<Integer, Long> shares) {
         if (accounts.containsKey(accountId)) {
@@ -58,10 +75,20 @@ public final class Ledger {
             holdings.put(e.getKey(), new Holding(e.getValue(), 0, 0, 0));
         }
         accounts.put(accountId, account);
+        recorder.accept(new LedgerCommand.OpenAccount(accountId, cashMinor, new TreeMap<>(shares)));
     }
 
     public PlaceResult place(long accountId, String clientOrderId, int symbol, Side side, long limitPriceMinor,
             long qty) {
+        PlaceResult result = checkAndLock(accountId, clientOrderId, symbol, side, limitPriceMinor, qty);
+        if (result instanceof PlaceResult.Locked) {
+            recorder.accept(new LedgerCommand.Place(accountId, clientOrderId, symbol, side, limitPriceMinor, qty));
+        }
+        return result;
+    }
+
+    private PlaceResult checkAndLock(long accountId, String clientOrderId, int symbol, Side side,
+            long limitPriceMinor, long qty) {
         OrderKey key = new OrderKey(accountId, clientOrderId);
         Order existing = orders.get(key);
         if (existing != null) {
@@ -108,9 +135,16 @@ public final class Ledger {
     }
 
     public void onAccepted(OrderKey key, long orderId) {
+        if (acceptOrder(key, orderId)) {
+            recorder.accept(new LedgerCommand.Accepted(key, orderId));
+        }
+    }
+
+    /** True when the order changed. */
+    private boolean acceptOrder(OrderKey key, long orderId) {
         Order order = orders.get(key);
         if (order == null || (order.getStage() != OrderStage.SENT && order.getStage() != OrderStage.IN_DOUBT)) {
-            return;
+            return false;
         }
         if (orderId <= 0) {
             throw new IllegalArgumentException("orderId must be positive: " + orderId);
@@ -124,6 +158,7 @@ public final class Ledger {
         order.setOrderId(orderId);
         order.setStage(OrderStage.OPEN);
         byEngineRef.put(ref, key);
+        return true;
     }
 
     public void onRefused(OrderKey key) {
@@ -137,6 +172,7 @@ public final class Ledger {
         // client_order_id must be a fresh order, not a Duplicate. It has no byEngineRef
         // entry yet.
         orders.remove(key);
+        recorder.accept(new LedgerCommand.Refused(key));
     }
 
     public void onNoAnswer(OrderKey key) {
@@ -145,6 +181,7 @@ public final class Ledger {
             return;
         }
         order.setStage(OrderStage.IN_DOUBT);
+        recorder.accept(new LedgerCommand.NoAnswer(key));
     }
 
     /**
@@ -161,6 +198,7 @@ public final class Ledger {
             case DONE -> CancelDecision.CLOSED;
             case OPEN -> {
                 order.setCancelPending(true);
+                recorder.accept(new LedgerCommand.RequestCancel(accountId, ref));
                 yield CancelDecision.SEND;
             }
             default -> CancelDecision.NOT_FOUND;
@@ -171,10 +209,11 @@ public final class Ledger {
     public void onCancelRefused(EngineRef ref) {
         OrderKey key = byEngineRef.get(ref);
         Order order = key == null ? null : orders.get(key);
-        if (order == null || order.getStage() != OrderStage.OPEN) {
-            return; // a late answer
+        if (order == null || order.getStage() != OrderStage.OPEN || !order.isCancelPending()) {
+            return; // a late answer, or nothing to clear
         }
         order.setCancelPending(false);
+        recorder.accept(new LedgerCommand.CancelRefused(ref));
     }
 
     private void releaseLock(Order order) {
@@ -198,6 +237,23 @@ public final class Ledger {
             }
         }
         return result;
+    }
+
+    /** Orders sent to the sequencer whose ack has not come yet, oldest first. Copies only. */
+    public List<OrderView> sentOrders() {
+        List<OrderView> result = new ArrayList<>();
+        for (Order order : orders.values()) {
+            if (order.getStage() == OrderStage.SENT) {
+                result.add(OrderView.of(order));
+            }
+        }
+        return result;
+    }
+
+    public int accountCount() { return accounts.size(); }
+
+    public long openOrdersCount() {
+        return orders.values().stream().filter(order -> order.getStage() != OrderStage.DONE).count();
     }
 
     public Optional<AccountView> account(long accountId) {
@@ -385,6 +441,11 @@ public final class Ledger {
     }
 
     public void onFill(EngineRef ref, long tradePriceMinor, long qty) {
+        fillOrder(ref, tradePriceMinor, qty);
+        recorder.accept(new LedgerCommand.Fill(ref, tradePriceMinor, qty));
+    }
+
+    private void fillOrder(EngineRef ref, long tradePriceMinor, long qty) {
         Order order = checkFill(ref, tradePriceMinor, qty);
         Account account = accounts.get(order.getKey().accountId());
 
@@ -427,6 +488,11 @@ public final class Ledger {
     }
 
     public void onRemainderEnded(EngineRef ref, long qty, DoneReason reason) {
+        endRemainder(ref, qty, reason);
+        recorder.accept(new LedgerCommand.RemainderEnded(ref, qty, reason));
+    }
+
+    private void endRemainder(EngineRef ref, long qty, DoneReason reason) {
         if (reason != DoneReason.CANCELED && reason != DoneReason.EXPIRED) {
             throw new IllegalArgumentException("reason must be CANCELED or EXPIRED: " + reason);
         }
@@ -453,6 +519,11 @@ public final class Ledger {
     }
 
     public void onEngineRejected(OrderKey key, long orderId) {
+        rejectOrder(key, orderId);
+        recorder.accept(new LedgerCommand.EngineRejected(key, orderId));
+    }
+
+    private void rejectOrder(OrderKey key, long orderId) {
         if (orderId <= 0) {
             throw new IllegalArgumentException("orderId must be positive: " + orderId);
         }
@@ -514,6 +585,7 @@ public final class Ledger {
         };
 
         lastApplied.put(e.symbol(), e.seq());
+        recorder.accept(new LedgerCommand.EngineEventApplied(e)); // APPLIED and IGNORED; DUPLICATE returned above
         return result;
     }
 
@@ -534,7 +606,7 @@ public final class Ledger {
             throw new IllegalStateException("order " + key + " has engine id " + order.getOrderId()
                     + " but the ACCEPTED event names " + e.orderId());
         }
-        onAccepted(key, e.orderId());
+        acceptOrder(key, e.orderId());
         return ApplyResult.applied(List.of(buildChange(e, order, AccountChangeKind.NEW, 0, 0)));
     }
 
@@ -567,10 +639,10 @@ public final class Ledger {
         }
 
         if (aggressor != null) {
-            onFill(aggressorRef, price, e.qty());
+            fillOrder(aggressorRef, price, e.qty());
         }
         if (passive != null) {
-            onFill(passiveRef, price, e.qty());
+            fillOrder(passiveRef, price, e.qty());
         }
 
         List<AccountChange> changes = new ArrayList<>();
@@ -641,7 +713,7 @@ public final class Ledger {
             warnNotOurs(e);
             return ApplyResult.ignored();
         }
-        onRemainderEnded(ref, e.qty(), reason);
+        endRemainder(ref, e.qty(), reason);
         Order order = orders.get(byEngineRef.get(ref));
         AccountChangeKind kind = switch (reason) {
             case CANCELED -> AccountChangeKind.CANCELED;
@@ -657,11 +729,92 @@ public final class Ledger {
             warnNotOurs(e);
             return ApplyResult.ignored();
         }
-        onEngineRejected(key, e.orderId());
+        rejectOrder(key, e.orderId());
         return ApplyResult.applied(List.of(buildChange(e, orders.get(key), AccountChangeKind.REJECTED, 0, 0)));
     }
 
     private static void warnNotOurs(EngineEvent e) {
         log.warn("engine event for an order not in the ledger (engine console or before a restart): {}", e);
+    }
+
+    // ---------------------------------------------------------------- snapshot
+
+    /** A plain copy of the whole state, in a fixed order, for a snapshot file. */
+    public LedgerState exportState() {
+        Map<Long, LedgerState.AccountState> accountStates = new TreeMap<>();
+        for (Account account : accounts.values()) {
+            Map<Integer, LedgerState.HoldingState> holdingStates = new TreeMap<>();
+            for (Map.Entry<Integer, Holding> e : account.getHoldings().entrySet()) {
+                Holding holding = e.getValue();
+                holdingStates.put(e.getKey(), new LedgerState.HoldingState(holding.getFreeQty(),
+                        holding.getLockedQty(), holding.getTotalCostMinor(), holding.getRealizedPnlMinorForSymbol()));
+            }
+            accountStates.put(account.getAccountId(),
+                    new LedgerState.AccountState(account.getAccountId(), account.getFreeCashMinor(),
+                            account.getLockedCashMinor(), account.getAccountSeq(),
+                            account.getRealizedPnlMinorTotal(), holdingStates));
+        }
+
+        List<LedgerState.OrderState> orderStates = new ArrayList<>(); // insertion order is part of the state
+        for (Order order : orders.values()) {
+            orderStates.add(new LedgerState.OrderState(order.getKey().accountId(), order.getKey().clientOrderId(),
+                    order.getSymbol(), order.getSide(), order.getLimitPriceMinor(), order.getOriginalQty(),
+                    order.getRemainingQty(), order.getFilledQty(), order.getFilledNotionalMinor(), order.getOrderId(),
+                    order.getStage(), order.getDoneReason(), order.isCancelPending()));
+        }
+
+        List<LedgerState.EngineRefEntry> refStates = new ArrayList<>();
+        for (Map.Entry<EngineRef, OrderKey> e : byEngineRef.entrySet()) {
+            refStates.add(new LedgerState.EngineRefEntry(e.getKey().symbol(), e.getKey().orderId(),
+                    e.getValue().accountId(), e.getValue().clientOrderId()));
+        }
+        refStates.sort(Comparator.comparingInt(LedgerState.EngineRefEntry::symbol)
+                .thenComparingLong(LedgerState.EngineRefEntry::orderId));
+
+        return new LedgerState(accountStates, orderStates, refStates, new TreeMap<>(lastApplied));
+    }
+
+    /** The Ledger a snapshot describes. Throws when the state points at things that are not there. */
+    public static Ledger fromState(LedgerState state) {
+        Ledger ledger = new Ledger();
+        for (LedgerState.AccountState accountState : state.accounts().values()) {
+            Account account = new Account(accountState.accountId(), accountState.freeCashMinor(),
+                    accountState.lockedCashMinor());
+            account.restoreAccountSeq(accountState.accountSeq());
+            account.setRealizedPnlMinorTotal(accountState.realizedPnlMinorTotal());
+            for (Map.Entry<Integer, LedgerState.HoldingState> e : accountState.holdings().entrySet()) {
+                LedgerState.HoldingState holding = e.getValue();
+                account.getHoldings().put(e.getKey(), new Holding(holding.freeQty(), holding.lockedQty(),
+                        holding.totalCostMinor(), holding.realizedPnlMinorForSymbol()));
+            }
+            ledger.accounts.put(account.getAccountId(), account);
+        }
+        for (LedgerState.OrderState orderState : state.orders()) {
+            OrderKey key = new OrderKey(orderState.accountId(), orderState.clientOrderId());
+            if (!ledger.accounts.containsKey(key.accountId())) {
+                throw new IllegalArgumentException("order " + key + " belongs to an unknown account");
+            }
+            Order order = new Order(key, orderState.symbol(), orderState.side(), orderState.limitPriceMinor(),
+                    orderState.originalQty());
+            order.setRemainingQty(orderState.remainingQty());
+            order.setFilledQty(orderState.filledQty());
+            order.setFilledNotionalMinor(orderState.filledNotionalMinor());
+            order.setOrderId(orderState.orderId());
+            order.setStage(orderState.stage());
+            order.setDoneReason(orderState.doneReason());
+            order.setCancelPending(orderState.cancelPending());
+            if (ledger.orders.put(key, order) != null) {
+                throw new IllegalArgumentException("order " + key + " appears twice");
+            }
+        }
+        for (LedgerState.EngineRefEntry entry : state.byEngineRef()) {
+            OrderKey key = new OrderKey(entry.accountId(), entry.clientOrderId());
+            if (!ledger.orders.containsKey(key)) {
+                throw new IllegalArgumentException("engine ref " + entry + " points at a missing order");
+            }
+            ledger.byEngineRef.put(new EngineRef(entry.symbol(), entry.orderId()), key);
+        }
+        ledger.lastApplied.putAll(state.lastApplied());
+        return ledger;
     }
 }

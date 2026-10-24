@@ -7,6 +7,10 @@ spring:
     listener:
       auto-startup: false
 cash-owner:
+  persistence:
+    enabled: false
+    data-dir: ./target/test-data
+    snapshot-every: 10000
   kafka:
     engine-events-topic: engine.events.v1
     account-updates-topic: cash.account-updates.v1

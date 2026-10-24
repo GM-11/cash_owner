@@ -92,7 +92,7 @@ class SequencerLinkTest {
         channel = InProcessChannelBuilder.forName(name).build();
 
         CashOwnerProperties props = new CashOwnerProperties(null,
-                new CashOwnerProperties.Sequencer(true, Duration.ofMillis(50), Duration.ofMillis(200)), null, null);
+                new CashOwnerProperties.Sequencer(true, Duration.ofMillis(50), Duration.ofMillis(200)), null, null, null);
         link = new SequencerLink(SequencerGrpc.newStub(channel), props);
         link.onStreamOpened(opened::incrementAndGet);
         link.onStreamLost(lost::incrementAndGet);

@@ -6,7 +6,10 @@ import java.util.Map;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties("cash-owner")
-public record CashOwnerProperties(Kafka kafka, Sequencer sequencer, Owner owner, DevSeed devSeed) {
+public record CashOwnerProperties(Kafka kafka, Sequencer sequencer, Owner owner, DevSeed devSeed, Persistence persistence) {
+
+    public record Persistence(boolean enabled, String dataDir, int snapshotEvery) {
+    }
 
     public record Kafka(String engineEventsTopic, String accountUpdatesTopic) {
     }

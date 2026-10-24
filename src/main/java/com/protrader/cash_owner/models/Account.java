@@ -29,6 +29,11 @@ public final class Account {
         return ++accountSeq;
     }
 
+    /** Only for rebuilding a Ledger from a snapshot. */
+    public void restoreAccountSeq(long accountSeq) {
+        this.accountSeq = accountSeq;
+    }
+
     public Holding getHoldingFromSymbol(int symbol) {
         return holdings.computeIfAbsent(symbol, ignored -> new Holding(0, 0, 0, 0));
     }

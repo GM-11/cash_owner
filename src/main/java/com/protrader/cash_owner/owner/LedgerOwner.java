@@ -20,6 +20,10 @@ import org.springframework.stereotype.Component;
 
 import com.protrader.cash_owner.config.CashOwnerProperties;
 import com.protrader.cash_owner.services.Ledger;
+import com.protrader.cash_owner.persistence.LedgerStore;
+import com.protrader.cash_owner.persistence.JournalFailedException;
+import java.nio.file.Path;
+import java.io.IOException;
 
 @Component
 public final class LedgerOwner implements SmartLifecycle {
@@ -51,7 +55,9 @@ public final class LedgerOwner implements SmartLifecycle {
         }
     }
 
-    private final Ledger ledger = new Ledger();
+    private volatile Ledger ledger = new Ledger();
+    private final LedgerStore store;
+    private volatile boolean recoveredEmpty = true;
     private final Settings settings;
     private final Consumer<Ledger> invariantCheck;
 
@@ -72,12 +78,24 @@ public final class LedgerOwner implements SmartLifecycle {
 
     @Autowired
     public LedgerOwner(CashOwnerProperties props) {
-        this(toSettings(props), Ledger::checkInvariants);
+        this(toSettings(props), Ledger::checkInvariants, toStore(props));
+    }
+
+    private static LedgerStore toStore(CashOwnerProperties props) {
+        CashOwnerProperties.Persistence persistence = props.persistence();
+        return persistence == null || !persistence.enabled() ? null
+                : new LedgerStore(Path.of(persistence.dataDir() == null ? "./data" : persistence.dataDir()),
+                        persistence.snapshotEvery() <= 0 ? 10_000 : persistence.snapshotEvery());
     }
 
     LedgerOwner(Settings settings, Consumer<Ledger> invariantCheck) {
+        this(settings, invariantCheck, null);
+    }
+
+    private LedgerOwner(Settings settings, Consumer<Ledger> invariantCheck, LedgerStore store) {
         this.settings = Objects.requireNonNull(settings, "settings");
         this.invariantCheck = Objects.requireNonNull(invariantCheck, "invariantCheck");
+        this.store = store;
         if (settings.maxPendingRequests() < 1) {
             throw new IllegalArgumentException("maxPendingRequests must be >= 1: " + settings.maxPendingRequests());
         }
@@ -176,6 +194,13 @@ public final class LedgerOwner implements SmartLifecycle {
                     break; // only stop() interrupts us, after the drain time ran out
                 }
                 if (task == stopMarker) {
+                    if (store != null) {
+                        try {
+                            store.snapshot(ledger);
+                        } catch (RuntimeException e) {
+                            log.error("could not snapshot ledger on clean stop", e);
+                        }
+                    }
                     break;
                 }
                 if (abort) {
@@ -211,6 +236,11 @@ public final class LedgerOwner implements SmartLifecycle {
         } catch (Error e) {
             fatal(task, e);
             throw e;
+        }
+
+        if (jobFailure instanceof JournalFailedException) {
+            fatal(task, jobFailure);
+            return false;
         }
 
         if (settings.checkInvariants()) {
@@ -292,12 +322,27 @@ public final class LedgerOwner implements SmartLifecycle {
             if (state != State.NEW) {
                 throw new IllegalStateException("ledger owner cannot be restarted");
             }
+            if (store != null) {
+                try {
+                    LedgerStore.Recovery recovery = store.recover();
+                    ledger = recovery.ledger();
+                    recoveredEmpty = recovery.empty();
+                    ledger.setRecorder(command -> store.record(command, ledger));
+                } catch (IOException e) {
+                    throw new IllegalStateException("could not recover cash-owner ledger", e);
+                }
+            }
             Thread thread = new Thread(this::loop, "ledger-owner");
             thread.setDaemon(true); // a job stuck even after interrupt must not keep the JVM alive
             ownerThread = thread;
             state = State.RUNNING;
             thread.start();
         }
+    }
+
+    /** True only when persistence recovered no snapshot and no journal records. */
+    public boolean recoveredEmpty() {
+        return recoveredEmpty;
     }
 
     @Override
@@ -345,6 +390,13 @@ public final class LedgerOwner implements SmartLifecycle {
             }
         }
 
+        if (store != null && state != State.NEW) {
+            try {
+                store.close();
+            } catch (IOException | RuntimeException e) {
+                log.error("could not cleanly snapshot/close ledger store", e);
+            }
+        }
         replyExecutor.shutdown();
         try {
             replyExecutor.awaitTermination(1, TimeUnit.SECONDS);

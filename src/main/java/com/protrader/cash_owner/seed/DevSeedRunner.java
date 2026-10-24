@@ -28,6 +28,10 @@ public class DevSeedRunner implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) throws Exception {
+        if (!owner.recoveredEmpty()) {
+            log.info("skipping dev seed: persistent ledger already has state");
+            return;
+        }
         for (CashOwnerProperties.SeedAccount account : accounts) {
             Map<Integer, Long> shares = account.shares() == null ? Map.of() : account.shares();
             owner.followUp(l -> {
