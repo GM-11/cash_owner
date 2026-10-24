@@ -104,9 +104,11 @@ public final class LedgerStore implements AutoCloseable {
         // Until startup has resolved SENT orders, no callbacks can append to the
         // journal.
         ledger.checkInvariants();
-        if (!segments.isEmpty()) {
+        if (!segments.isEmpty() && segments.get(segments.size() - 1).firstEntryNo() > snapshotNo) {
             writer = JournalWriter.open(segments.get(segments.size() - 1).path(), fsync);
         } else {
+            // no segment, or the last one starts at or before the snapshot: a new segment keeps cleanup from
+            // deleting records newer than a kept snapshot
             writer = JournalWriter.open(dir.resolve(JournalFiles.segmentName(entryNo + 1)), fsync);
         }
         previousSnapshot = snapshotNo;
@@ -132,8 +134,14 @@ public final class LedgerStore implements AutoCloseable {
         }
         entryNo = next;
         sinceSnapshot++;
-        if (sinceSnapshot >= snapshotEvery)
-            snapshot(ledger);
+        if (sinceSnapshot >= snapshotEvery) {
+            // the journal entry is durable; a failed snapshot is retried by the next record
+            try {
+                snapshot(ledger);
+            } catch (RuntimeException e) {
+                log.error("ledger snapshot at entry {} failed; will retry on the next record", entryNo, e);
+            }
+        }
     }
 
     public boolean isEmpty() {

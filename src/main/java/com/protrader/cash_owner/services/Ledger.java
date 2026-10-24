@@ -442,6 +442,10 @@ public final class Ledger {
 
     public void onFill(EngineRef ref, long tradePriceMinor, long qty) {
         fillOrder(ref, tradePriceMinor, qty);
+        Order filled = orders.get(byEngineRef.get(ref));
+        if (filled.getStage() == OrderStage.DONE) {
+            filled.setCancelPending(false); // the trade path clears it in addFillChanges
+        }
         recorder.accept(new LedgerCommand.Fill(ref, tradePriceMinor, qty));
     }
 

@@ -361,13 +361,14 @@ class LedgerCancelTest {
     // ---------------------------------------------------------------- invariant
 
     @Test
-    void givenADoneOrderWithACancelPending_whenInvariantsAreChecked_thenItThrows() {
+    void givenACancelPending_whenTheLowLevelOnFillFinishesTheOrder_thenCancelPendingIsClearedAndInvariantsHold() {
         // Given a cancel pending, then the order filled through the low-level entry point (skipping the trade path)
         EngineRef ref = open(BOB, "b1", Side.BUY, PRICE_100, 10, 1);
         ledger.requestCancel(BOB, ref);
         ledger.onFill(ref, PRICE_100, 10);
 
-        // Then the broken state is caught
-        assertThrows(IllegalStateException.class, ledger::checkInvariants);
+        // Then DONE implies no cancel pending
+        assertEquals(false, order("b1", BOB).cancelPending());
+        ledger.checkInvariants();
     }
 }
