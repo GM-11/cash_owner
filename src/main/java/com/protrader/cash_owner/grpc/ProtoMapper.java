@@ -49,7 +49,8 @@ public final class ProtoMapper {
     private static OrderStatus statusOf(OrderView v) {
         return switch (v.stage()) {
             case SENT, IN_DOUBT -> OrderStatus.ORDER_STATUS_PENDING_NEW;
-            case OPEN -> v.filledQty() == 0 ? OrderStatus.ORDER_STATUS_NEW : OrderStatus.ORDER_STATUS_PARTIALLY_FILLED;
+            case OPEN -> v.cancelPending() ? OrderStatus.ORDER_STATUS_PENDING_CANCEL
+                    : v.filledQty() == 0 ? OrderStatus.ORDER_STATUS_NEW : OrderStatus.ORDER_STATUS_PARTIALLY_FILLED;
             case DONE -> v.doneReason() == null ? OrderStatus.ORDER_STATUS_UNSPECIFIED : switch (v.doneReason()) {
                 case FILLED -> OrderStatus.ORDER_STATUS_FILLED;
                 case CANCELED -> OrderStatus.ORDER_STATUS_CANCELED;
@@ -120,6 +121,7 @@ public final class ProtoMapper {
             case CANCELED -> OrderEvent.Kind.KIND_CANCELED;
             case EXPIRED -> OrderEvent.Kind.KIND_EXPIRED;
             case REJECTED -> OrderEvent.Kind.KIND_REJECTED;
+            case CANCEL_REJECTED -> OrderEvent.Kind.KIND_CANCEL_REJECTED;
         };
     }
 

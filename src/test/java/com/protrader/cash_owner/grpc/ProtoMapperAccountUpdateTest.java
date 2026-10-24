@@ -29,7 +29,7 @@ class ProtoMapperAccountUpdateTest {
 
     private static OrderView order() {
         return new OrderView(new OrderKey(21, "b1"), MOOG, Side.BUY, 10_000, 10, 4, 6, 58_800, 2, OrderStage.OPEN,
-                null);
+                null, false);
     }
 
     private static AccountView balances() {

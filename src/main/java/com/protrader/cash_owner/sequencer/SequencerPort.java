@@ -10,9 +10,12 @@ public interface SequencerPort {
     /** Sends one request without waiting. false = no open stream; nothing was sent. */
     boolean submit(SubmitRequest request);
 
+    /** Adds a handler. All handlers are called, in registration order, on the thread that delivers the event. */
     void onAck(Consumer<SubmitAck> handler);
 
+    /** Adds a handler; see {@link #onAck}. */
     void onStreamOpened(Runnable handler);
 
+    /** Adds a handler; see {@link #onAck}. */
     void onStreamLost(Runnable handler);
 }

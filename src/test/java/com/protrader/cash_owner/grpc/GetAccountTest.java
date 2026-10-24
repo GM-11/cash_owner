@@ -38,7 +38,7 @@ class GetAccountTest {
         owner = LedgerOwner.forTests(new LedgerOwner.Settings(100, true, Duration.ofSeconds(5)),
                 Ledger::checkInvariants);
         owner.start();
-        service = new CashOwnerService(null, null, owner);
+        service = new CashOwnerService(null, null, null, owner);
     }
 
     @AfterEach

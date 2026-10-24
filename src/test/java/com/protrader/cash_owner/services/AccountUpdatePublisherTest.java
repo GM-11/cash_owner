@@ -42,7 +42,7 @@ class AccountUpdatePublisherTest {
 
     private static AccountChange change(long accountId, long accountSeq) {
         OrderView order = new OrderView(new OrderKey(accountId, "c"), 1, Side.BUY, 10_000, 10, 10, 0, 0, 5,
-                OrderStage.OPEN, null);
+                OrderStage.OPEN, null, false);
         BalancesView balances = new BalancesView(900_000, 100_000, 0);
         return new AccountChange(accountId, accountSeq, AccountChangeKind.NEW, order, 0, 0, 7, 1234, balances, null);
     }

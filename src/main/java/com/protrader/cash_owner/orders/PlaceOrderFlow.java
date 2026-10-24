@@ -128,6 +128,9 @@ public class PlaceOrderFlow {
     }
 
     private List<Outgoing> onAck(Ledger l, SubmitAck ack) {
+        if (ack.getClientOrderId().isEmpty()) {
+            return List.of(); // a cancel ack: CancelOrderFlow takes it
+        }
         OrderKey key = new OrderKey(ack.getAccountId(), ack.getClientOrderId());
         InFlight f = inFlight.get(key);
         if (f == null) {

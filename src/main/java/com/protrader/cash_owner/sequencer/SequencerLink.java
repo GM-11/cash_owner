@@ -13,6 +13,8 @@ import io.grpc.ForwardingClientCallListener;
 import io.grpc.Metadata;
 import io.grpc.MethodDescriptor;
 import io.grpc.stub.StreamObserver;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -32,11 +34,9 @@ public class SequencerLink implements SequencerPort, SmartLifecycle {
     private final ScheduledExecutorService timer = Executors
             .newSingleThreadScheduledExecutor(Thread.ofPlatform().name("sequencer-link").daemon().factory());
 
-    private volatile Consumer<SubmitAck> onAck = ack -> log.debug("sequencer ack (no handler yet): {}", ack);
-    private volatile Runnable onStreamOpened = () -> {
-    };
-    private volatile Runnable onStreamLost = () -> {
-    };
+    private final List<Consumer<SubmitAck>> ackHandlers = new CopyOnWriteArrayList<>();
+    private final List<Runnable> openedHandlers = new CopyOnWriteArrayList<>();
+    private final List<Runnable> lostHandlers = new CopyOnWriteArrayList<>();
 
     private StreamObserver<SubmitRequest> out; // guarded by this; null = no stream that has opened (headers seen)
     private Attempt current; // guarded by this; the attempt in progress or open
@@ -49,15 +49,15 @@ public class SequencerLink implements SequencerPort, SmartLifecycle {
     }
 
     public void onAck(Consumer<SubmitAck> handler) {
-        this.onAck = handler;
+        ackHandlers.add(handler);
     }
 
     public void onStreamOpened(Runnable handler) {
-        this.onStreamOpened = handler;
+        openedHandlers.add(handler);
     }
 
     public void onStreamLost(Runnable handler) {
-        this.onStreamLost = handler;
+        lostHandlers.add(handler);
     }
 
     /** Sends one request. false = no open stream; nothing was sent. */
@@ -134,7 +134,12 @@ public class SequencerLink implements SequencerPort, SmartLifecycle {
                 synchronized (SequencerLink.this) {
                     backoffMs = cfg.reconnectMin().toMillis(); // the stream works: reset backoff
                 }
-                onAck.accept(ack);
+                if (ackHandlers.isEmpty()) {
+                    log.debug("sequencer ack (no handler yet): {}", ack);
+                }
+                for (Consumer<SubmitAck> handler : ackHandlers) {
+                    handler.accept(ack);
+                }
             }
 
             @Override
@@ -197,7 +202,7 @@ public class SequencerLink implements SequencerPort, SmartLifecycle {
 
     private void announceOpen() {
         log.info("sequencer stream started");
-        onStreamOpened.run();
+        openedHandlers.forEach(Runnable::run);
     }
 
     private void closed(Attempt attempt, String why) {
@@ -220,7 +225,7 @@ public class SequencerLink implements SequencerPort, SmartLifecycle {
         }
         if (wasOpen) {
             log.warn("sequencer stream lost ({}); reconnecting in {} ms", why, delay);
-            onStreamLost.run();
+            lostHandlers.forEach(Runnable::run);
         } else {
             // never open, so nothing was lost: no onStreamLost
             log.warn("sequencer stream failed before it opened ({}); reconnecting in {} ms", why, delay);

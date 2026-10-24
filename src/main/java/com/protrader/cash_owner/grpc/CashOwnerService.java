@@ -1,5 +1,6 @@
 package com.protrader.cash_owner.grpc;
 
+import com.protrader.cash_owner.orders.CancelOrderFlow;
 import com.protrader.cash_owner.orders.PlaceOrderFlow;
 import com.protrader.cash_owner.owner.LedgerOwner;
 import com.protrader.cash_owner.owner.OwnerBusyException;
@@ -41,11 +42,14 @@ public class CashOwnerService extends CashOwnerGrpc.CashOwnerImplBase {
 
     private final AccountUpdateBus updates;
     private final PlaceOrderFlow placeOrderFlow;
+    private final CancelOrderFlow cancelOrderFlow;
     private final LedgerOwner owner;
 
-    public CashOwnerService(AccountUpdateBus updates, PlaceOrderFlow placeOrderFlow, LedgerOwner owner) {
+    public CashOwnerService(AccountUpdateBus updates, PlaceOrderFlow placeOrderFlow,
+            CancelOrderFlow cancelOrderFlow, LedgerOwner owner) {
         this.updates = updates;
         this.placeOrderFlow = placeOrderFlow;
+        this.cancelOrderFlow = cancelOrderFlow;
         this.owner = owner;
     }
 
@@ -97,7 +101,7 @@ public class CashOwnerService extends CashOwnerGrpc.CashOwnerImplBase {
 
     @Override
     public void cancelOrder(CancelOrderRequest request, StreamObserver<CancelOrderAck> out) {
-        notBuilt(out, "CancelOrder");
+        cancelOrderFlow.cancel(request, out);
     }
 
     @Override

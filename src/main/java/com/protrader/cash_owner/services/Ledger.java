@@ -15,6 +15,7 @@ import com.protrader.cash_owner.models.Account;
 import com.protrader.cash_owner.models.AccountChange;
 import com.protrader.cash_owner.models.AccountChangeKind;
 import com.protrader.cash_owner.models.ApplyResult;
+import com.protrader.cash_owner.models.CancelDecision;
 import com.protrader.cash_owner.models.DoneReason;
 import com.protrader.cash_owner.models.EngineEvent;
 import com.protrader.cash_owner.models.EngineRef;
@@ -144,6 +145,36 @@ public final class Ledger {
             return;
         }
         order.setStage(OrderStage.IN_DOUBT);
+    }
+
+    /**
+     * A cancel request for an open order. Moves no money: only the engine's CANCELLED event unlocks anything.
+     * Repeating a cancel is harmless to the engine, so a repeat answers SEND again.
+     */
+    public CancelDecision requestCancel(long accountId, EngineRef ref) {
+        OrderKey key = byEngineRef.get(ref);
+        Order order = key == null ? null : orders.get(key);
+        if (order == null || order.getKey().accountId() != accountId) {
+            return CancelDecision.NOT_FOUND; // never reveal that someone else's order exists
+        }
+        return switch (order.getStage()) {
+            case DONE -> CancelDecision.CLOSED;
+            case OPEN -> {
+                order.setCancelPending(true);
+                yield CancelDecision.SEND;
+            }
+            default -> CancelDecision.NOT_FOUND;
+        };
+    }
+
+    /** The sequencer gave a definite no to a cancel: it never reached the engine. */
+    public void onCancelRefused(EngineRef ref) {
+        OrderKey key = byEngineRef.get(ref);
+        Order order = key == null ? null : orders.get(key);
+        if (order == null || order.getStage() != OrderStage.OPEN) {
+            return; // a late answer
+        }
+        order.setCancelPending(false);
     }
 
     private void releaseLock(Order order) {
@@ -284,6 +315,9 @@ public final class Ledger {
                 throw new IllegalStateException("DONE order " + order.getKey() + " still has remaining qty "
                         + order.getRemainingQty());
             }
+            if (order.getStage() == OrderStage.DONE && order.isCancelPending()) {
+                throw new IllegalStateException("DONE order " + order.getKey() + " still has a cancel pending");
+            }
         }
     }
 
@@ -415,6 +449,7 @@ public final class Ledger {
         order.setRemainingQty(0);
         order.setStage(OrderStage.DONE);
         order.setDoneReason(reason);
+        order.setCancelPending(false);
     }
 
     public void onEngineRejected(OrderKey key, long orderId) {
@@ -447,6 +482,7 @@ public final class Ledger {
         order.setRemainingQty(0);
         order.setStage(OrderStage.DONE);
         order.setDoneReason(DoneReason.REJECTED);
+        order.setCancelPending(false);
         if (order.getOrderId() == 0) {
             order.setOrderId(orderId);
         }
@@ -539,12 +575,25 @@ public final class Ledger {
 
         List<AccountChange> changes = new ArrayList<>();
         if (aggressor != null) {
-            changes.add(fillChange(e, aggressor, price));
+            addFillChanges(changes, e, aggressor, price);
         }
         if (passive != null) {
-            changes.add(fillChange(e, passive, price));
+            addFillChanges(changes, e, passive, price);
         }
         return ApplyResult.applied(changes);
+    }
+
+    /**
+     * The fill's change; plus a CANCEL_REJECTED when the fill finished an order that had a cancel pending: events
+     * per symbol are strictly ordered, so the cancel reached the engine too late.
+     */
+    private void addFillChanges(List<AccountChange> changes, EngineEvent e, Order order, long price) {
+        changes.add(fillChange(e, order, price));
+        if (order.getStage() == OrderStage.DONE && order.getDoneReason() == DoneReason.FILLED
+                && order.isCancelPending()) {
+            order.setCancelPending(false);
+            changes.add(buildChange(e, order, AccountChangeKind.CANCEL_REJECTED, 0, 0));
+        }
     }
 
     private AccountChange fillChange(EngineEvent e, Order order, long price) {
