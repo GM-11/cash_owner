@@ -34,7 +34,11 @@ public class AccountUpdateBus {
             gateways.remove(stream);
             log.info("account-updates: gateway {} disconnected", gatewayId);
         });
-        gateways.put(stream, gatewayId);
+        synchronized (stream) { // publish() also locks the stream: no update can slip in before the headers
+            gateways.put(stream, gatewayId);
+            // Headers now = "registered" for the gateway, which turns its /readyz account_updates check green.
+            EarlyHeaders.sendNow();
+        }
         log.info("account-updates: gateway {} subscribed ({} connected)", gatewayId, gateways.size());
     }
 
